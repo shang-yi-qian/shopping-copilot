@@ -31,6 +31,7 @@ def product(
     features: list[str] | None = None,
     details: dict[str, str] | None = None,
     rating_number: int = 10,
+    store: str = "Test Store",
 ) -> dict:
     return {
         "parent_asin": asin,
@@ -42,7 +43,7 @@ def product(
         "details": details or {"Department": "Mens"},
         "average_rating": 4.0,
         "rating_number": rating_number,
-        "store": "Test Store",
+        "store": store,
     }
 
 
@@ -100,6 +101,52 @@ class AgentContractTest(unittest.TestCase):
                 "Red silk evening dress",
                 category="Dresses",
                 features=["silk", "color: red", "Evening style"],
+            ),
+            product(
+                "AAAA_COTTON",
+                "Cotton travel gloves",
+                category="Accessories",
+                features=["cotton", "Breathable travel gloves"],
+                rating_number=12,
+            ),
+            product(
+                "ZZZZ_LEATHER",
+                "Leather travel gloves",
+                category="Accessories",
+                features=["leather", "Durable travel gloves"],
+                rating_number=12,
+            ),
+            product(
+                "HAT_A1",
+                "Popular sun hat",
+                category="Hats",
+                features=["rayon", "Wide brim"],
+                rating_number=300,
+                store="Same Brand",
+            ),
+            product(
+                "HAT_A2",
+                "Classic sun hat",
+                category="Hats",
+                features=["cotton", "Wide brim"],
+                rating_number=200,
+                store="Same Brand",
+            ),
+            product(
+                "HAT_A3",
+                "Modern sun hat",
+                category="Hats",
+                features=["silk", "Wide brim"],
+                rating_number=150,
+                store="Same Brand",
+            ),
+            product(
+                "HAT_B1",
+                "Alternative sun hat",
+                category="Hats",
+                features=["nylon", "Wide brim"],
+                rating_number=100,
+                store="Other Brand",
             ),
             product(
                 "COAT_GRAY",
@@ -217,10 +264,44 @@ class AgentContractTest(unittest.TestCase):
             },
         )
         profile["summary"] = "mutated outside the Agent"
+        profile["preference_tags"].append("mutated")
         self.assertEqual(
             self.agent.sessions["profile-session"]["profile"]["summary"],
             "Prior purchases emphasize fit and material.",
         )
+        self.assertEqual(
+            self.agent.sessions["profile-session"]["profile"]["preference_tags"],
+            ["fit", "material"],
+        )
+        profile_slots = self.agent.sessions["profile-session"]["profile_slot_metadata"]
+        self.assertTrue(profile_slots)
+        self.assertTrue(all(slot["source"] == "profile" for slot in profile_slots))
+        self.assertTrue(all(not slot["hard"] for slot in profile_slots))
+
+    def test_supplied_profile_is_a_soft_deterministic_tie_break(self) -> None:
+        profile = {
+            "preference_tags": ["leather"],
+            "summary": "Prior purchases emphasize leather.",
+        }
+        self.agent.reset("profile-on", profile)
+        enabled = self.agent.respond(
+            "profile-on",
+            "I'm looking for Men Accessories, but I'm still exploring.",
+            1,
+            2,
+        )
+        enabled_asins = self.assert_valid_response(enabled, 2)
+        without_profile = Agent(self.catalog_path, enable_profile=False)
+        without_profile.reset("profile-off", profile)
+        disabled = without_profile.respond(
+            "profile-off",
+            "I'm looking for Men Accessories, but I'm still exploring.",
+            1,
+            2,
+        )
+        disabled_asins = self.assert_valid_response(disabled, 2)
+        self.assertEqual(enabled_asins[0], "ZZZZ_LEATHER")
+        self.assertEqual(disabled_asins[0], "AAAA_COTTON")
 
     def test_response_matches_published_contract(self) -> None:
         self.reset()
@@ -291,8 +372,12 @@ class AgentContractTest(unittest.TestCase):
         self.assertLess(asins.index("TARGET"), asins.index("DECOY01"))
         state = self.agent.sessions["session-a"]
         self.assertEqual(state["mode"], "buying")
+        self.assertEqual(state["route"], "precision")
         self.assertEqual(state["category"], "shirts")
         self.assertEqual(state["constraints"], ["color: blue"])
+        self.assertEqual(state["slot_metadata"]["color: blue"]["source"], "opening")
+        self.assertTrue(state["slot_metadata"]["color: blue"]["hard"])
+        self.assertEqual(state["route_history"][-1]["route"], "precision")
 
     def test_browsing_opening_records_mode_without_fabricating_constraint(self) -> None:
         self.reset()
@@ -305,8 +390,33 @@ class AgentContractTest(unittest.TestCase):
         self.assert_valid_response(response, 3)
         state = self.agent.sessions["session-a"]
         self.assertEqual(state["mode"], "browsing")
+        self.assertEqual(state["route"], "discovery")
         self.assertEqual(state["category"], "men boots")
         self.assertEqual(state["constraints"], [])
+
+    def test_unconstrained_browsing_covers_distinct_product_families(self) -> None:
+        self.reset()
+        response = self.agent.respond(
+            "session-a",
+            "I'm looking for Men Hats, but I'm still exploring.",
+            1,
+            3,
+        )
+        asins = self.assert_valid_response(response, 3)
+        self.assertEqual(asins, ["HAT_A1", "HAT_A2", "HAT_B1"])
+
+        no_diversity = Agent(self.catalog_path, enable_diversity=False)
+        no_diversity.reset("no-diversity", {})
+        response = no_diversity.respond(
+            "no-diversity",
+            "I'm looking for Men Hats, but I'm still exploring.",
+            1,
+            3,
+        )
+        self.assertEqual(
+            self.assert_valid_response(response, 3),
+            ["HAT_A1", "HAT_A2", "HAT_A3"],
+        )
 
     def test_browsing_category_persists_into_constraint_reply(self) -> None:
         self.reset()
@@ -359,6 +469,12 @@ class AgentContractTest(unittest.TestCase):
         self.assertEqual(
             self.agent.sessions["session-a"]["constraints"],
             ["cotton", "color: blue"],
+        )
+        state = self.agent.sessions["session-a"]
+        self.assertFalse(state["profile_active"])
+        self.assertEqual(
+            state["truncated_soft_slots"],
+            list(state["profile_context"]),
         )
 
     def test_repeated_constraint_is_stored_once(self) -> None:
@@ -431,12 +547,17 @@ class AgentContractTest(unittest.TestCase):
         self.assertEqual(after_asins[0], "COAT_GRAY")
         self.assertIn("COAT_GRAY", set(before_asins) & set(after_asins))
         self.assertEqual(self.agent.sessions["session-a"]["mode"], "intent_override")
+        state = self.agent.sessions["session-a"]
+        self.assertEqual(state["route"], "override_recovery")
+        self.assertEqual(state["eligibility_epoch"], 1)
+        self.assertEqual(state["slot_metadata"]["rayon"]["source"], "override")
 
     def test_empty_lexical_query_uses_nonempty_valid_fallback(self) -> None:
         self.reset()
         response = self.agent.respond("session-a", "", 1, 5)
         asins = self.assert_valid_response(response, 5)
         self.assertTrue(asins)
+        self.assertEqual(self.agent.sessions["session-a"]["route"], "fallback")
 
     def test_unknown_constraint_does_not_collapse_candidate_pool(self) -> None:
         self.reset()
