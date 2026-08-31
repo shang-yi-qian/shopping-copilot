@@ -2,21 +2,22 @@
 
 ## Tagline
 
-Stateful, route-aware conversational shopping that recommends and learns from
-each turn—offline, deterministic, and cost-free at inference time.
+Stateful, route-aware conversational shopping that recommends and updates
+context each turn—offline, deterministic, and cost-free at inference time.
 
 ## Public links
 
 - Source repository: <https://github.com/shang-yi-qian/shopping-copilot>
-- Demo video: publish the recording from `DEMO_SCRIPT.md` to the team's public
-  YouTube account and place that URL in Devpost's video field before submission.
+- Demo video: insert the final public YouTube URL here and in Devpost's video
+  field before submission.
 
-## Inspiration and problem
+## How the solution addresses the problem statement
 
-Keyword search works when shoppers already know the exact words to type. It is
-much less useful when somebody starts with “I'm still exploring,” adds a material
-or fit requirement later, or changes their mind. Those sessions are common in
-real shopping, but a static search box repeatedly forgets context.
+The supplied problem identifies three weaknesses in static keyword search:
+failure to distinguish Buying from Browsing, failure to accumulate or replace
+intent across turns, and unnecessary conversational turns. IntentCart addresses
+each weakness through explicit runtime routing, isolated structured state, and
+simultaneous ranked retrieval plus proactive clarification.
 
 IntentCart treats conversational shopping as sequential experiment design. Each
 turn must rank the best products now, expose useful unseen alternatives, and ask
@@ -128,26 +129,7 @@ or structured semantic stage would need a licensed reproducible artifact,
 dependency and memory accounting, validated fallback, and a measured improvement
 over this control before adoption.
 
-## Challenges and lessons
-
-The hardest evaluator details were conversational rather than infrastructural.
-Recommendations and questions can coexist, “other” can reveal two attributes,
-the evaluator does not deduplicate across turns, and Override targets cannot
-score before the explicit change. That last rule led to our eligibility-epoch
-idea: an item shown before the intent becomes valid is not evidence of a scored
-miss and may need to be reconsidered.
-
-Catalog metadata is also uneven. Price exists for about 21% of rows, descriptions
-for about 52%, and some signatures collide across hundreds of parent products.
-Safe non-empty intersections, multiple fallback routes, clarification, and
-stable tie-breaking were more reliable than assuming every field was complete.
-
-Finally, public performance must not be mistaken for generalization. We did not
-preserve an untouched 40-session holdout before full-public iteration, so the
-separate 800-session final package is the real test. We will run only the frozen
-`submission-v1` tag after release and will not tune on final labels.
-
-## Impact
+## Impact and relevance
 
 The measured outcome is less search friction in this challenge: the target is
 covered in all public sessions and found in 2.12 turns on average. In a real

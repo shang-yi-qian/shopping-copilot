@@ -379,9 +379,11 @@ music.
 - External model/API: none; 0 tokens; US$0; no network dependency
 
 Copy-ready Devpost content is in [DEVPOST.md](DEVPOST.md), and the complete
-recording/runbook is in [DEMO_SCRIPT.md](DEMO_SCRIPT.md). Publishing the Devpost
-entry and YouTube video requires the team's external accounts; after publication,
-place both public URLs in the Devpost form and verify them while signed out.
+recording/runbook is in [DEMO_SCRIPT.md](DEMO_SCRIPT.md). The exact remaining
+account actions are in [SUBMISSION_STEPS.md](SUBMISSION_STEPS.md). Publishing the
+Devpost entry and YouTube video requires the team's external accounts; after
+publication, place both public URLs in the Devpost form and verify them while
+signed out.
 
 After the submission deadline, run the released 800-session package only against
 the immutable `submission-v1` tag with the official evaluator unchanged. Retain

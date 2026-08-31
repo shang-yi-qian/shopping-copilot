@@ -962,56 +962,22 @@ result.
 
 ### 9.10 Devpost description template
 
-`DEVPOST.md` should contain copy-ready text under these headings:
+`DEVPOST.md` should contain copy-ready text that follows the supplied deliverable
+exactly rather than adding generic hackathon sections. It must cover:
 
-#### Inspiration
+1. how the solution addresses the supplied problem statement;
+2. what the Agent does and how it is built;
+3. an end-to-end inference demonstration and measured public-development result;
+4. development tools used;
+5. APIs used, accurately stated as none for the frozen runtime;
+6. libraries and frameworks used;
+7. datasets and assets used;
+8. relevant impact, feasibility, limitations, and team contributions; and
+9. the public repository and YouTube links.
 
-Explain the gap between keyword matching and evolving customer intent.
-
-#### What it does
-
-Describe how the agent jointly chooses ten products and one clarification each
-turn, handles Buying/Browsing/Override/Boundary behavior, and stops within the
-ten-turn limit.
-
-#### How we built it
-
-Name:
-
-- Python and SQLite FTS5;
-- catalog-derived intent signatures;
-- in-memory reverse indexes;
-- session-state tracking;
-- official Amazon Reviews 2023-derived frozen catalog; and
-- the unmodified organizer evaluator.
-
-Explicitly state that the release path uses no external LLM/API if that remains
-true.
-
-#### Challenges
-
-Mention sparse metadata, indistinguishable generic products, intent replacement,
-and optimizing both rank and number of turns.
-
-#### Accomplishments
-
-Report the measured baseline improvement, scenario balance, deterministic
-runtime, and zero model cost.
-
-#### What we learned
-
-Explain why information acquisition and retrieval cannot be optimized
-independently in a conversational system.
-
-#### What's next
-
-List dense semantic retrieval, learned posterior calibration, natural-language
-robustness beyond templates, and richer real-world preference memory.
-
-#### Built with
-
-List only tools actually used. Do not list an API, library, or model that is not
-present in the frozen build.
+Do not add a project-inspiration section. List only tools actually used, do not
+claim a model/vector stage that is absent from the frozen build, and label every
+200-session metric as public development rather than final/private performance.
 
 #### Team contributions
 
@@ -1849,15 +1815,15 @@ Requirement classifications used below:
 | P3 | Devpost lists APIs | D | Runtime APIs accurately listed as none | OpenAI is not presented as a runtime API. |
 | P4 | Devpost lists libraries/frameworks | D | Python standard library, SQLite FTS5, and unittest listed | No optional dependency is claimed. |
 | P5 | Devpost lists datasets/assets | D | Frozen catalog/public set, Amazon Reviews 2023 attribution, and original demo assets listed | No unlicensed product/media asset is included. |
-| P6 | Public repository with well-structured, commented code | D | Agent is structured; public visibility pending | Person B reviews comments/readability; signed-out browser verifies public access. |
+| P6 | Public repository with well-structured, commented code | D | Agent is structured and the repository was verified public while signed out | Preserve public access through judging. |
 | P7 | README overview, setup, installation, reproduction, limitations, improvements, contributions | D | Complete outline exists | Fresh-clone reproduction and two-person content audit are release blockers. |
-| V1 | Short end-to-end demo video | D | Executable `demo.py`, captured `DEMO_OUTPUT.md`, and complete `DEMO_SCRIPT.md` are ready | Recording/upload remains an external-account action. |
+| V1 | Short end-to-end demo video | D | A verified 2:53.8 upload-ready 1080p video, captions, thumbnail, executable `demo.py`, and captured `DEMO_OUTPUT.md` are ready | YouTube upload remains an external-account action. |
 | V2 | Video is public on YouTube and linked from Devpost | D | Pending external action | Verify while signed out and capture URL/confirmation. |
 | V3 | Backend walkthrough is acceptable without a UI | D | Covered | Use terminal/API/evaluator evidence; do not add a cosmetic UI. |
-| V4 | No unauthorized trademarks or copyrighted content | H/D | Previously missing | Use original diagrams and terminal recordings; no Amazon logos/pages, webinar clips, product images, copyrighted music, or third-party footage. Use dataset names only for factual attribution. |
+| V4 | No unauthorized trademarks or copyrighted content | H/D | Completed in the prepared video using original rendered evidence and narration | No Amazon logos/pages, webinar clips, product images, copyrighted music, or third-party footage; dataset names appear only for factual attribution. |
 | J1 | Technical Execution, 35% | J | Strong measured RC | Evidence: architecture, code review, tests, deterministic evaluator, fallback, runtime, and commit-linked metrics. |
 | J2 | Innovation & Problem Insight, 20% | J | Sequential-experiment framing covered | Explain why each turn jointly selects products and information; distinguish this insight from generic “AI search.” |
-| J3 | Impact & Relevance, 20% | J | Needs explicit user/business narrative | Tie fewer turns and better rank to reduced search friction, discovery, conversion opportunity, and applicability beyond one dataset without inventing business results. |
+| J3 | Impact & Relevance, 20% | J | Completed with an evidence-bounded user/business narrative | Fewer turns and better rank are tied to reduced search friction, discovery, conversion opportunity, and applicability beyond one dataset without inventing business results. |
 | J4 | Feasibility & Practicality, 15% | J | Offline RC is strong | Report CPU, memory, initialization, response/evaluation latency, dependencies, network reliance, token use, cost, and fallback. |
 | J5 | Presentation & Communication, 10% at finals | J | Script exists | Prepare coherent problem→insight→architecture→demo→evidence→impact story and Q&A answers for every non-obvious design choice. |
 
@@ -2285,7 +2251,7 @@ In addition to Section 9.12, all of the following must be true:
 
 - [x] Every row in Section 11.2 is marked with real evidence, an honest deferred
       limitation, or an allowed/non-applicable justification.
-- [ ] The README, Devpost, video, code, and metric files describe the same frozen
+- [x] The README, Devpost, video, code, and metric files describe the same frozen
       architecture—offline or enhanced—with no phantom LLM/vector components.
 - [x] Buying/Browsing detection, accumulation, Override, Boundary, overload
       clarification, and ten-turn behavior have direct test evidence.
@@ -2361,6 +2327,9 @@ dense or neural semantic claim, zero model tokens/cost, and no network reliance.
   libraries, data/assets, cost, impact, and limitations.
 - `DEMO_SCRIPT.md`: timed live-demo plan, evidence list, IP/safety checks, and
   publication checklist.
+- `SUBMISSION_STEPS.md`: exact external publication and post-release actions.
+- `docs/audits/IntentCart_End_to_End_Demo.mp4`: ignored upload-ready 2:53.8
+  video with matching captions, thumbnail, and checksum manifest.
 - `NOTES.md`: evaluator/catalog facts, requirement coverage, performance,
   security, and final-evaluation boundary.
 
@@ -2388,7 +2357,7 @@ Code cannot create or submit a YouTube/Devpost entry without the team's accounts
 The unchecked external definition-of-done groups above therefore remain
 intentionally open until the owner:
 
-1. records and publicly uploads the run in `DEMO_SCRIPT.md`;
+1. publicly uploads the prepared video named in `SUBMISSION_STEPS.md`;
 2. publishes `DEVPOST.md` and inserts the public YouTube URL;
 3. verifies repository/video/Devpost links while signed out; and
 4. retains submission confirmation, URLs, and the exact `submission-v1` SHA.

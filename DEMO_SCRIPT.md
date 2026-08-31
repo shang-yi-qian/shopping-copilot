@@ -1,7 +1,11 @@
 # IntentCart Demo Video Runbook
 
-Target length: 3–4 minutes. The recording demonstrates real inference and the
-official evaluator; it does not rely on slides alone.
+Final length: 2:53.8. The upload-ready recording demonstrates real inference
+results and the official evaluator; it does not rely on slides alone.
+
+Local upload files are `docs/audits/IntentCart_End_to_End_Demo.mp4`, the matching
+`.srt` captions, and `IntentCart_Demo_Thumbnail.png`. This ignored evidence
+directory keeps generated media out of the source repository.
 
 ## Before recording
 
@@ -20,7 +24,7 @@ official evaluator; it does not rely on slides alone.
 
 ## Recording sequence
 
-### 0:00–0:25 — Problem and promise
+### 0:00–0:19 — Problem and promise
 
 Show the README title and say:
 
@@ -31,7 +35,7 @@ Show the README title and say:
 State that the solution targets Buying, Browsing, Intent Override, and Boundary
 behavior over the organizer's frozen 50,000-product catalog.
 
-### 0:25–0:55 — Architecture
+### 0:19–0:44 — Architecture
 
 Show the README Mermaid diagram and point out:
 
@@ -46,7 +50,7 @@ Say explicitly:
 > The frozen runtime is standard-library Python plus SQLite FTS5. It makes zero
 > model or network calls, uses zero tokens, and costs zero dollars in model fees.
 
-### 0:55–1:45 — Live end-to-end inference
+### 0:44–1:20 — Browsing inference
 
 Run:
 
@@ -62,6 +66,8 @@ For `public_0007`, highlight:
 4. profile terms becoming inactive as explicit intent takes over; and
 5. candidate narrowing to one and target rank 1 on turn 2.
 
+### 1:20–1:40 — Intent Override inference
+
 For `public_0003`, highlight:
 
 1. the stale initial preference;
@@ -73,7 +79,7 @@ For `public_0003`, highlight:
 Explain that the demo consults public ground truth only after each prediction to
 label the result. `starter/agent.py` never receives targets or scenario labels.
 
-### 1:45–2:10 — Contract and tests
+### 1:40–2:02 — Contract and tests
 
 Run:
 
@@ -86,7 +92,7 @@ isolation, Buying/Browsing routing, profile immutability and soft ranking,
 family coverage, accumulation, neutral Boundary behavior, selective override,
 eligibility epochs, fallbacks, determinism, top-k, and turn 10.
 
-### 2:10–2:45 — Official results
+### 2:02–2:24 — Official results
 
 Run before recording, or run live if the 15-second pause is acceptable:
 
@@ -108,7 +114,7 @@ Tokens          0
 Then show the per-scenario table in README: Hit@10 is 1.0 in all four scenarios.
 Label every number “200-session public development,” not final/private.
 
-### 2:45–3:20 — Feasibility, impact, and honesty
+### 2:24–2:54 — Feasibility, impact, and close
 
 Show the feasibility table and say:
 
@@ -123,8 +129,6 @@ Show the feasibility table and say:
 Show limitations: deterministic-template dependence, lexical semantic limits,
 weak generic profile tags, approximate families, and no untouched holdout.
 
-### 3:20–3:35 — Close
-
 Show the public repository URL and closing attribution:
 
 > IntentCart uses the organizer-provided clothing catalog derived from Amazon
@@ -134,24 +138,25 @@ Show the public repository URL and closing attribution:
 
 ## Required visible evidence
 
-- [ ] Frozen tag/commit visible.
-- [ ] `python3 demo.py` live output visible.
-- [ ] Browsing rank-1 turn-2 result visible.
-- [ ] Override eligibility and rank-1 turn-3 result visible.
-- [ ] 26/26 passing tests visible.
-- [ ] Overall and all four scenario metrics visible.
-- [ ] Runtime, memory, tokens, cost, and network dependency stated.
-- [ ] Public-development label visible.
-- [ ] Repository and dataset attribution visible.
+- [x] Frozen tag/commit visible.
+- [x] `python3 demo.py` inference output visible.
+- [x] Browsing rank-1 turn-2 result visible.
+- [x] Override eligibility and rank-1 turn-3 result visible.
+- [x] 26/26 passing tests visible.
+- [x] Overall and all four scenario metrics visible.
+- [x] Runtime, memory, tokens, cost, and network dependency stated.
+- [x] Public-development label visible.
+- [x] Repository and dataset attribution visible.
 
 ## Final safety and publication audit
 
-- [ ] No `.env`, API key, private profile content, hidden final data, email,
+- [x] No `.env`, API key, private profile content, hidden final data, email,
       private filesystem path, or account credential appears in any frame.
-- [ ] No unlicensed music, logos, product imagery, storefront pages, webinar
+- [x] No unlicensed music, logos, product imagery, storefront pages, webinar
       footage, organizer slides, or third-party media appears.
-- [ ] Captions are accurate and readable.
-- [ ] Description links the public repository and credits Amazon Reviews 2023.
+- [x] Captions are accurate and readable.
+- [x] Prepared description links the public repository and credits Amazon
+      Reviews 2023.
 - [ ] Video visibility is Public, not Unlisted or Private if the rules require
       public access.
 - [ ] YouTube URL opens while signed out.
