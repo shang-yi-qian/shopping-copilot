@@ -1,377 +1,316 @@
 # IntentCart Engineering Notes
 
-This file records evaluator facts, catalog evidence, and design decisions for the
-TechJam 2026 Track 4 submission. It exists so every non-obvious choice can be
-traced to the official contract or a measured property of the released data.
+This file records evaluator facts, catalog audits, implementation decisions, and
+release evidence for the complete Person A + Person B integration. Historical
+planning remains in `CLAUDE.md`; this file describes the selected build.
 
-## Sources of truth
+## Source precedence
 
-In descending order of authority:
+When sources differ, the project follows:
 
-1. `docs/final_evaluation_faq.md`
-2. `docs/competition_specification.md`
-3. `docs/agent_api_contract.json`
-4. `docs/evaluation_config.json`
-5. `evaluator/local_evaluator.py`
-6. `data/public_set.jsonl` for public development measurement only
-7. `CLAUDE.md` for the agreed team execution plan
+1. `docs/submission_rules.md`, `docs/competition_specification.md`,
+   `docs/final_evaluation_faq.md`, and `docs/agent_api_contract.json`;
+2. the unmodified official evaluator and evaluation config;
+3. the published workshop brief; and
+4. the local implementation plan.
 
-The Agent must not import or inspect public ground truth, mutate the catalog, or
-change the official evaluator when producing reported results.
+The official policy allows keyword, dense, hybrid, local-model, external-API,
+and non-LLM solutions. Dense retrieval and LLM use are optional, so omitted
+components are disclosed rather than simulated or misrepresented.
 
-## Evaluator recon answers
+## Evaluator facts that drive the design
 
-### Q1 — What does `ask_attribute` reveal?
-
-The simulator uses the structured `ask_attribute`; it does not infer the
-requested attribute from the natural-language `message`.
-
-- A specific attribute returns an undisclosed target constraint only if
-  `classify_constraint()` assigns that constraint to the requested attribute.
-- If no matching undisclosed constraint exists, the reply says that there is no
-  additional preference for that attribute.
-- `ask_attribute="other"` accepts every constraint class and returns up to two
-  undisclosed target constraints.
-- A Boundary session deliberately returns one no-preference response for the
-  first non-null question, then follows the normal policy.
-
-Decision: use a natural multi-facet question with `ask_attribute="other"` while
-the candidate pool remains ambiguous. Continue returning recommendations on the
-same turn.
-
-### Q2 — Does asking consume a turn?
-
-Yes. The evaluator increments the turn for every `respond()` call, regardless of
-whether the response asks a question.
-
-Decision: asking is not free, but asking and recommending together is permitted.
-Every turn should return up to ten recommendations.
-
-### Q3 — What happens to repeated ASINs?
-
-`normalize_recommendations()` removes invalid and repeated ASINs within the
-current response. It does not deduplicate across turns and applies no explicit
-cross-turn penalty.
-
-If a previous response did not stop the session, none of its valid recommended
-ASINs was the target. Decision: retain a per-session `seen_asins` set and use
-later turns for unseen coverage.
-
-### Q4 — How is MRR calculated?
-
-MRR uses the target's rank inside the successful turn's recommendation list. It
-is not calculated over a global cross-turn list. Later hits are penalized by
-MTTC, not by an additional MRR turn discount.
-
-Decision: preserve strongest-first ordering on each turn while using remaining
-positions for unseen candidates.
-
-## Other evaluator facts
-
-- Maximum turns: 10.
-- Scored list: first 10 valid unique catalog ASINs in each response.
-- A score field on recommendations is accepted but ignored.
-- A session stops on the first valid target hit.
-- Intent Override cannot score before the replacement intent is revealed.
-- Final customer messages use the same deterministic templates and response
-  policy as the public evaluator; no hidden paraphrase set is introduced.
-- Final evaluation is run against the frozen submitted commit with the official
-  evaluator unchanged.
-- Sessions execute sequentially. Immutable indexes may be shared, but mutable
-  conversation state must be isolated.
-- LLM use is optional. Offline preprocessing and catalog-derived indexes are
-  explicitly allowed.
+- Exactly 200 public sessions are evaluated sequentially; the private/final set
+  contains 800 separate sessions released after the Devpost deadline.
+- Maximum turns are 10 and scored recommendations are the first 10 unique,
+  catalog-valid parent ASINs.
+- A question and recommendations may coexist in one response.
+- `ask_attribute="other"` can disclose up to two remaining constraints across
+  classes; a specific attribute returns only matching undisclosed constraints.
+- A Boundary session returns one neutral no-preference answer when the Agent
+  asks; neutral evidence must not become a negative slot.
+- Intent Override cannot score before its explicit replacement turn.
+- MRR is the target rank within the successful turn, not a cross-turn rank.
+- The evaluator does not deduplicate recommendations across turns. If a normal
+  eligible response misses, those ASINs are useful negative evidence.
+- Pre-override recommendations are not scored evidence. The Agent starts a new
+  eligibility epoch so an early product can be considered after the new intent.
+- Unknown natural-language paraphrases are not part of the published final
+  simulator policy, though fallback behavior is still required.
+- Public `scenario_type`, target ASIN, and generated intent cards remain inside
+  the evaluator and are never passed to `Agent`.
 
 ## Catalog audit
 
-Audit command: a read-only Python scan of `data/catalog.jsonl` on 2026-09-01.
+The Agent reads the organizer's immutable 50,000-row
+`Clothing_Shoes_and_Jewelry` catalog.
 
-| Field | Non-empty rows | Coverage | Retrieval decision |
-|---|---:|---:|---|
-| `parent_asin` | 50,000 | 100.000% | Scored identifier |
-| `categories` | 50,000 | 100.000% | Safe category route |
-| `average_rating` | 50,000 | 100.000% | Late tie-break only |
-| `rating_number` | 50,000 | 100.000% | Popularity tie-break only |
-| `title` | 49,998 | 99.996% | Strong lexical field |
-| `store` | 49,686 | 99.372% | Soft lexical/brand signal |
-| `details` | 48,330 | 96.660% | Signature and lexical signal |
-| `features` | 44,781 | 89.562% | Signature and lexical signal |
-| `description` | 26,113 | 52.226% | Soft lexical signal; never required |
-| `price` | 10,527 | 21.054% | Never unconditional hard filter |
-
-Catalog invariants observed:
-
-- 50,000 rows.
-- 50,000 unique `parent_asin` values.
-- All 200 public target ASINs are present in the catalog.
-
-Decision: exact constraints may safely narrow only when their reverse-index
-intersection remains non-empty. Sparse fields such as price and description are
-ranking signals, not unconditional filters.
-
-## Public-set audit
-
-| Dimension | Count |
+| Property | Result |
 |---|---:|
-| Buying | 80 |
-| Browsing | 80 |
-| Intent Override | 30 |
-| Boundary | 10 |
-| Easy | 80 |
-| Medium | 90 |
-| Hard | 30 |
+| Rows | 50,000 |
+| Unique parent ASINs | 50,000 |
+| Normalized coarse categories | 1,115 |
+| Unique catalog signatures | 40,732 |
+| Singleton signatures | 38,653 |
+| Largest signature collision | 442 |
 
-All 200 public profiles report `3-4 prior purchases`, so that field has no
-discriminative power on the public set. Profile tag frequencies are:
+Field coverage:
 
-| Tag | Sessions |
+| Field | Coverage |
 |---|---:|
-| fit | 163 |
-| material | 154 |
-| comfort | 144 |
-| style | 101 |
-| durability | 47 |
-| performance | 26 |
-| warmth | 18 |
-| weather | 12 |
-| general shopping | 1 |
+| parent ASIN, categories, ratings | 100% |
+| title | 99.996% |
+| store | 99.372% |
+| details | 96.660% |
+| features | 89.562% |
+| description | 52.226% |
+| price | 21.054% |
 
-Decision: profile tags may prioritize soft signals or future clarification, but
-they must not override explicit current-session constraints.
+Archive SHA-256:
+`07fd142631fd6b03e2b4d09988c3eb7d53720e9d57010c79db48eeaada50a8f8`.
 
-## Popularity-prior validation
+Decompressed catalog SHA-256:
+`da979b05a68af864cb0dcf9ee6a81c010c7e66a57978ad286c7a2e005fc69a67`.
 
-`rating_number` is strongly skewed toward the 200 public targets:
+Design consequences:
 
-| Population | Mean | Median | P75 | P90 | Mean `log1p` |
-|---|---:|---:|---:|---:|---:|
-| Entire 50,000-item catalog | 241.409 | 12 | 59 | 260 | 2.9556 |
-| 200 public targets | 16,179.415 | 6,846 | 18,076 | 40,492 | 8.2892 |
+- Optional metadata never gates initialization.
+- Price is an optional signature value, never an unconditional hard filter.
+- Popularity is a late tie-break because raw `rating_number` is highly skewed.
+- Category, signatures, BM25, and deterministic fallback are all needed.
+- Signature collisions explain why clarification, lexical ordering, popularity,
+  and unseen coverage still matter after exact matching.
 
-This is strong evidence that the leave-last-out target sampling favors popular
-products. However, multiplying relevance by raw popularity would let irrelevant
-popular products dominate. Decision: use `rating_number` only after exact
-signature, category, and lexical relevance signals in a deterministic sorting
-tuple. Re-run this comparison only if the official catalog changes.
+## Final Agent architecture
 
-## Architecture decisions
+### Immutable indexes
 
-### Kept for the three-hour sprint
+Initialization creates:
 
-- Catalog-derived ordered intent signatures.
-- Exact category and constraint reverse indexes.
-- Existing SQLite FTS5 BM25 index as recall fallback.
-- Per-session state with selective override erasure.
-- `ask_attribute="other"` plus recommendations on ambiguous turns.
-- Cross-turn unseen-ASIN coverage.
-- Popularity as final tie-breaker.
-- Standard-library-only runtime and zero model cost.
+- a compact `ProductRecord` for every catalog row;
+- normalized category and signature reverse indexes;
+- deterministic category/global popularity orders; and
+- an in-memory SQLite FTS5 index over title, category, features, details, store,
+  and description.
 
-### Deferred
+No index contains public labels, targets, intent cards, scenario types, or user
+identifiers. The catalog is read but never modified.
 
-- External embedding APIs.
-- Local transformer dependencies.
-- Dense vector artifacts.
-- LLM-based structured attribute extraction.
-- Entropy optimization over specific attributes.
-- UI or web service.
-- Upstream review/co-purchase data.
+### Session state
 
-These are deferred because they cannot be implemented, evaluated, documented,
-and reproduced safely inside the current sprint. They remain future work, not
-features to claim in the frozen submission.
-
-## Independently verified Agent release candidate
-
-Person A handed off commit
-`00f1e413f4e984cc9dbfd7e44f2e8c7a051b566f` from
-`origin/feat/agent`. Person B fetched and evaluated that exact commit in a clean
-archive at 2026-09-01 in Asia/Singapore. The current delivery test file was copied
-in for contract/state testing; `starter/agent.py` was neither edited nor patched.
-
-### Change-scope audit
-
-- Parent: `02f15cd6ba969c831169bc84f146098bad0c1a2f`.
-- RC changes only `starter/agent.py` (`+372/-25`).
-- `git diff --check 02f15cd..00f1e41` is clean.
-- The evaluator, public set, catalog archive, checksum, and contract documents
-  are unchanged by the RC.
-- Static review found no public-set or ground-truth path, public target ASIN,
-  HTTP client, external model SDK, or network endpoint in the Agent.
-- Catalog archive SHA-256 remains
-  `07fd142631fd6b03e2b4d09988c3eb7d53720e9d57010c79db48eeaada50a8f8`.
-- Independent initialization indexed exactly 50,000 records and 50,000 unique
-  `parent_asin` values with zero pre-existing sessions.
-
-### Runtime requirement discovered during independent validation
-
-The RC uses `@dataclass(frozen=True, slots=True)`, so Python 3.10 or later is an
-actual minimum requirement rather than merely a recommendation. The machine's
-Apple system Python 3.9.6 fails at import with:
+Each `reset()` deep-copies the documented aggregate profile and creates an
+isolated state containing:
 
 ```text
-TypeError: dataclass() got an unexpected keyword argument 'slots'
+profile + normalized profile_context + profile slot metadata
+mode + active route + route history
+category + ordered constraints + constraint metadata
+explicitly stale old_preference + override_applied + eligibility_epoch
+seen_asins + asked_attributes + last_candidate_count
+active/truncated profile indicators
 ```
 
-No Agent change is warranted. The release documentation and `requirements.txt`
-must state Python >=3.10, and the frozen evaluation environment must record the
-exact interpreter. Independent validation used Homebrew Python 3.12.14 with
-SQLite 3.53.4 and FTS5 available.
+Constraint metadata contains value, source, confidence, introduction turn, last
+confirmation turn, and a hard/soft marker. Customer-stated constraints are hard
+and never decay. Supplied profile terms have confidence 0.25 and are dynamically
+truncated after two explicit session constraints.
 
-### Test result
+### Orchestrator
 
-Command, executed against the exact RC plus Person B's contract/state test file:
+Observed message/state—not hidden scenario labels—selects:
 
-```bash
-/opt/homebrew/bin/python3.12 -m unittest discover -s tests -v
+| Route | Trigger | Retrieval/policy behavior |
+|---|---|---|
+| `precision` | Buying plus hard evidence | 300-item BM25 recall, exact intersections, no diversity/profile override |
+| `discovery` | Browsing | 400-item lexical recall, weak profile prior, conservative family coverage |
+| `override_recovery` | Explicit replacement applied | Recomputed pool and new eligibility epoch |
+| `fallback` | Incomplete/unknown/pre-override | Lexical/category/global safety path |
+
+The route trace stores only turn, route, candidate count, question decision, and
+whether profile terms participated. It is inspectable in tests and `demo.py` but
+not printed by production inference.
+
+### Ranking and coverage
+
+Rank tuples prioritize:
+
+1. positional constraint matches;
+2. matches anywhere in the catalog signature;
+3. category equality;
+4. route-appropriate lexical/profile ranks;
+5. popularity; and
+6. parent ASIN for deterministic ties.
+
+Profile evidence remains soft because all explicit signature evidence and
+category equality outrank it; after enough current evidence it is removed.
+Unconstrained discovery covers at most two products per store/title family
+before backfill. Constrained retrieval never applies diversity.
+
+Shown ASINs are excluded for the current eligibility epoch. Exact, BM25,
+category, and global lists are merged with stable deduplication, yielding up to
+`min(top_k, 10)` catalog-valid unique recommendations.
+
+### Clarification and failures
+
+The Agent asks `other` when the pool exceeds the output capacity, the question
+can still be used, and uncertainty remains. It always recommends on the same
+turn. Turn 10 never asks.
+
+On an exact miss, candidate narrowing retains the last non-empty pool. FTS errors
+return an empty lexical route and fall through to category/global order. Missing
+metadata is safe. A response-level exception still attempts a catalog-valid,
+unseen global fallback.
+
+## Supplied-profile audit
+
+Public aggregate fields are `purchase_frequency`, `average_prior_rating`,
+`rating_style`, `preference_tags`, and `summary`. All 200 public profiles use the
+same purchase-frequency band. Common tags are fit, material, comfort, style,
+durability, performance, warmth, and weather.
+
+The implementation:
+
+- reads only `preference_tags` and `summary` for ranking context;
+- deep-copies input and never mutates the caller's nested list;
+- stores no state across sessions;
+- never logs profile values in normal output;
+- never infers identity, demographics, or private history;
+- never uses profile evidence as a hard filter; and
+- truncates the prior as explicit session evidence accumulates.
+
+This is accurately called supplied-profile conditioning, not learned long-term
+memory.
+
+## Public metrics and ablations
+
+Control `00f1e413f4e984cc9dbfd7e44f2e8c7a051b566f`:
+
+```text
+Hit@10          1.000000
+MRR             0.707655
+MTTC            2.120000
+Efficiency      0.888000
+TechnicalScore  0.889896
 ```
 
-Result after the updated workshop-coverage plan: **24/24 passed** in 0.053
-seconds on the miniature fixture.
+Enhanced Agent `0ea7705f9e295855cadc85bd44141b841ff0685f`:
 
-- Organizer evaluator tests: 3/3.
-- Participant Agent tests: 21/21.
-- Covered release gates: required reset, response schema, valid/unique ASINs,
-  cross-turn dedupe, override eligibility-epoch reset, session isolation,
-  Buying/Browsing mode detection, ordered accumulation, duplicate-constraint
-  suppression, selective override, Boundary behavior, overload clarification
-  cutoff, empty-query fallback, missing metadata, missing-catalog failure, safe
-  profile copying, failed intersection, deterministic ranking, top-k handling,
-  and no unnecessary turn-10 question.
-
-### Official public evaluator reproduction
-
-Command:
-
-```bash
-/usr/bin/time -p /opt/homebrew/bin/python3.12 \
-  -m evaluator.local_evaluator \
-  --output /tmp/intentcart-rc-00f1e41-results.json
+```text
+Hit@10          1.000000
+MRR             0.709905
+MTTC            2.120000
+Efficiency      0.888000
+TechnicalScore  0.890571
 ```
-
-Results on the 200-session public development set:
-
-| Metric | Independently reproduced value |
-|---|---:|
-| Hit@10 | 1.000000 |
-| MRR | 0.707655 |
-| MTTC | 2.120000 |
-| Efficiency | 0.888000 |
-| TechnicalScore | 0.889896 |
-| Prompt tokens | 0 |
-| Completion tokens | 0 |
-| Exceptions | 0 |
 
 Scenario metrics (`Hit@10 / MRR / MTTC`):
 
-| Scenario | Result |
-|---|---|
-| Buying | 1.000000 / 0.697480 / 1.600000 |
-| Browsing | 1.000000 / 0.671657 / 1.962500 |
-| Intent Override | 1.000000 / 0.811667 / 3.666667 |
-| Boundary | 1.000000 / 0.765000 / 2.900000 |
-
-The partner handoff reported approximately 13 seconds. Person B's cold,
-end-to-end `/usr/bin/time` run on an Apple M4 MacBook Pro with 16 GB memory and
-macOS 15.5 measured 20.85 seconds (`user 20.45`, `sys 0.25`). Both are retained;
-public documentation uses the independently reproduced 20.85-second value and
-labels hardware/environment.
-
-A separate timing wrapper around the exact Agent reported:
-
-| Measurement | Value |
-|---|---:|
-| Catalog load performed by evaluator | 0.673218 s |
-| Agent initialization | 7.785188 s |
-| Evaluation after setup | 12.309894 s |
-| `respond()` calls | 424 |
-| Mean response latency | 28.880855 ms |
-| Median response latency | 26.362625 ms |
-| P95 response latency | 62.312896 ms |
-| Maximum response latency | 110.095083 ms |
-
-Saved public-result file SHA-256:
-`980e6288c63e2222cd85d21051df1a7238bacdbe294bdf5033a2059678a58829`.
-This ignored evidence file remains local and must be copied into the team's
-submission-evidence folder after integration.
-
-Two additional full runs produced byte-identical JSON with the same SHA-256 and
-the same aggregate and scenario metrics. The third run measured 21.56 seconds
-and a maximum resident set size of 416,415,744 bytes (397.125 MiB). This remains
-inside the plan's practical target of 500 MB. The repeated output is direct
-determinism evidence for the selected RC.
-
-### Demo traces selected from the verified result
-
-- Browsing: `public_0007`, target rank 1 on turn 2.
-- Intent Override: `public_0003`, target rank 1 on turn 3 after the official
-  override gate. The target appears on turn 2 but is not score-eligible until the
-  replacement intent arrives; the Agent correctly clears pre-override seen-ASIN
-  evidence and reranks it on turn 3.
-
-## Updated workshop-coverage audit
-
-The requirements matrix in `CLAUDE.md` Section 11 was re-read in full after RC1
-selection. The frozen sprint candidate intentionally remains the measured
-offline implementation; W1–W5 are experiment tracks, not authorization to add
-unmeasured components after the score gate.
-
-| Requirement area | Release evidence | Honest boundary/deferred action |
+| Scenario | Control | Enhanced |
 |---|---|---|
-| Buying/Browsing detection | Direct mode/category/constraint tests | Mode is explicit, but no claim of dense semantic routing |
-| Buying precision | Exact-signature priority and failed-intersection tests | Exact constraint intersections are conditional on non-empty recall |
-| Browsing recall | Category plus accumulated-context BM25 and trace `public_0007` | No dense vector or explicit family-diversity route |
-| Multi-turn state | Accumulation, duplicate suppression, isolation tests | No persistent identity or cross-session memory |
-| Override | Selective erasure test and eligibility-epoch test/trace | Pre-override results are not treated as scored misses |
-| Boundary | Neutral no-preference fallback test | No negative slot is fabricated |
-| Overload clarification | Ambiguous pool asks `other`; narrowed pool stops asking | No entropy model or tuned information-gain threshold |
-| Supplied profile | Input is copied into isolated state and never logged | RC does **not** use profile fields for ranking; personalization is future work |
-| Dynamic orchestration | Mode, candidate count, state, and remaining turn drive behavior | Policies share core ranking; no confidence/slot-decay layer |
-| Vector retrieval | Not shipped | W3 remains future measured work; BM25 is never called dense retrieval |
-| LLM semantic ranking | Not shipped | External runtime API/model/tokens/cost are none/none/0/$0 |
-| Reproducibility | Three byte-identical official runs, checksum, Python/SQLite record | Integrated main must still be rerun and tied to its final hash |
-| Generalization | Catalog-only Agent, no target imports/hardcoding | No untouched 40-session holdout was preserved before full-public iteration; this is disclosed and no private result is claimed |
-| Security | `.env` ignored; Agent has no network/model client | Full Git-history secret scan remains a freeze gate |
-| External delivery | README/Devpost/demo sources prepared | Names, final hash/tag, public repo/video/Devpost URLs require team/external action |
+| Buying | 1.000000 / 0.697480 / 1.600000 | 1.000000 / 0.703730 / 1.612500 |
+| Browsing | 1.000000 / 0.671657 / 1.962500 | 1.000000 / 0.671032 / 1.950000 |
+| Intent Override | 1.000000 / 0.811667 / 3.666667 | 1.000000 / 0.811667 / 3.666667 |
+| Boundary | 1.000000 / 0.765000 / 2.900000 | 1.000000 / 0.765000 / 2.900000 |
 
-No optional vector, LLM, profile-ranking, family-diversity, or slot-decay feature
-is described as implemented in the public artifacts.
+The feature-off table and commands are in `ABLATION.md` and `ablate.py`.
+The small public delta is not claimed as statistically significant.
 
-## Resource-link verification
+## Reproduction and performance record
 
-Read-only checks on 2026-09-01 returned HTTP 200 for:
+Selected Agent commit: `0ea7705f9e295855cadc85bd44141b841ff0685f`.
 
-- `https://github.com/TechJam2026/techjam-conversational-search`
-- `https://github.com/TechJam2026/techjam-conversational-search/releases/tag/participant-kit`
-- `https://amazon-reviews-2023.github.io/`
+Environment:
 
-The organizer has not supplied a public/shareable URL for the 28 Aug webinar
-recording in the repository. Do not upload, redistribute, or invent a link for
-that recording.
+```text
+Apple M2 Pro MacBook Pro, 16 GB
+macOS 26.5.2 arm64
+Python 3.12.5
+SQLite 3.45.3 with FTS5
+```
 
-## Measurement rules
+Verification:
 
-- Every metric row in `ABLATION.md` must include a commit hash.
-- Only the unmodified official evaluator may produce reported final metrics.
-- Do not claim private-set performance before the private package is released.
-- Prefer a measured simpler commit to an unmeasured later commit.
-- Record per-scenario metrics, not only the overall composite.
-- Record runtime, Python version, model/token usage, and estimated model cost.
-- Public labels are used only by the evaluator, never by Agent logic.
+- 23/23 participant tests passed.
+- 3/3 organizer tests passed.
+- 200/200 evaluator sessions completed with zero Agent exceptions.
+- Two full outputs were byte-identical.
+- Result JSON SHA-256:
+  `0faad255af1b1ad12fca5923fd124e0192594e88f348bc3e3bd5caa5f3cdad71`.
+- Catalog load: 0.395293 s.
+- Agent initialization: 4.853555 s.
+- Evaluation after setup: 9.080255 s.
+- Cold evaluator wall time: 14.85 s.
+- 424 `respond()` calls.
+- Mean/median/P95/max latency:
+  21.311968 / 19.126250 / 41.749625 / 67.475958 ms.
+- Maximum resident memory: 428,244,992 bytes (408.4 MiB).
+- Network/API/model: none.
+- Prompt/completion tokens: 0/0.
+- Estimated model cost: US$0.
 
-## Open items before freeze
+The same control metrics were independently reproduced on the partner's Apple
+M4/Python 3.12.14 environment before integration. Runtime differences are
+reported as environment variance, not a performance claim.
 
-- [x] Select Agent RC `00f1e41`.
-- [x] Record independently reproduced RC public metrics and runtime.
-- [x] Confirm Agent uses no public labels or hardcoded public ASINs.
-- [x] Confirm official and participant tests pass against the RC.
-- [x] Confirm documented test/evaluator commands reproduce the RC result under
-      Python 3.12.14.
-- [x] Confirm `.env`, decompressed catalog, and results output are ignored.
-- [x] Run the non-printing Git-history API-key-pattern scan; no match found.
-- [x] Measure peak memory and repeated-run determinism.
-- [x] Verify the three organizer/upstream resource URLs return HTTP 200.
-- [ ] Cherry-pick the delivery commit onto `00f1e41` and rerun the freeze gate.
-- [ ] Insert the final integrated commit hash and tag.
-- [ ] Replace contribution placeholders with team member names.
-- [ ] Record public repository, video, and Devpost URLs.
+## End-to-end demonstration
+
+`python3 demo.py` replays `public_0007` (Browsing) and `public_0003` (Intent
+Override) with the official simulator policy. It prints each customer message,
+safe policy trace, ranked predictions, and scored outcome.
+
+- Browsing: candidate pool 519 → 1; target rank 1 on turn 2.
+- Override: target appears before eligibility, the epoch resets, and the target
+  scores at rank 1 on turn 3.
+
+The verified output is preserved in `DEMO_OUTPUT.md`. Ground truth is used only
+by the demo/evaluator to label results after inference; the Agent never receives
+it.
+
+## Requirement-coverage audit
+
+| Area | Final evidence | Boundary |
+|---|---|---|
+| Buying/Browsing | Explicit route table, route traces, direct tests | Template-aware, not a general NLU claim |
+| Precision | Safe exact signature intersections and positional ranking | Sparse unknown constraints remain soft |
+| Browsing recall/diversity | Category + FTS5 + profile prior + two-per-family coverage | No neural semantic embeddings |
+| State | Accumulation, metadata, isolation, dynamic profile truncation | No cross-session identity/memory |
+| Override | Selective erasure and eligibility epoch | Reconsideration occurs only after explicit override |
+| Boundary | Neutral no-preference test | No negative preference fabricated |
+| Clarification | Candidate overload plus simultaneous recommendations | Uses simulator-efficient `other`, not learned entropy |
+| Personalization | Deep-copied profile prior plus off/on test and ablation | Weak supplied conditioning only |
+| Orchestration | Four deterministic policies and safe traces | No learned controller |
+| Vector retrieval | Not adopted under official optional-model rule | No dense claim or vector artifact |
+| LLM reranking | Not adopted under official optional-model rule | No model/API/tokens/cost/network |
+| Metrics | Control/final overall and all scenario metrics | Public development only |
+| Feasibility | CPU runtime, latency, memory, dependency/cost disclosure | Single-process evaluation, not load testing |
+| Demonstration | Executable `demo.py` + captured `DEMO_OUTPUT.md` | Headless, as allowed by the brief |
+| Reproducibility | Checksums, tests, evaluator command, deterministic result hash | Final clean-clone audit occurs at release freeze |
+| Generalization | Catalog-only code; no target strings/imports | No untouched holdout or private claim |
+
+## Security and provenance rules
+
+- `.env`, decompressed catalog, result JSON, caches, and virtual environments are
+  ignored.
+- The Agent has no environment-variable lookup, HTTP client, model SDK, or
+  network call.
+- API keys must never be committed, logged, pasted into screenshots, or shown in
+  the video. Any key previously exposed outside Git should be revoked.
+- Public target ASINs and `public_set` are absent from production Agent logic.
+- Organizer evaluator, config, catalog archive, and public set remain unchanged.
+- Dataset attribution lives in `DATA_ATTRIBUTION.md`.
+- Demo assets are original terminal output/diagrams; no storefront imagery,
+  logos, third-party footage, webinar content, or copyrighted music is used.
+
+## Release actions
+
+Internal artifacts are complete when the final freeze audit passes. Actions that
+require team-owned external accounts remain:
+
+1. publish the final branch to `main` and create `submission-v1`;
+2. record the demo using `DEMO_SCRIPT.md` and upload it publicly to YouTube;
+3. paste `DEVPOST.md` into the Devpost entry and add the repository/video links;
+4. verify repository, video, and Devpost access while signed out; and
+5. retain the final submission confirmation, tag SHA, URLs, and result JSON.
+
+After release of the 800-session package, run only the frozen tag with the
+unmodified official evaluator and retain the evidence without tuning.

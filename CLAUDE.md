@@ -1810,20 +1810,20 @@ Requirement classifications used below:
 |---|---|---:|---|---|
 | B1 | Explain why static keyword search fails for evolving, ambiguous intent | J | Covered in Sections 6, 9.9, and 9.10 | README, Devpost, and demo must connect ambiguity and intent change to user/business value rather than only describing code. |
 | B2 | Build a next-generation shopping agent with cognitive understanding, runtime agility, and commercial efficiency | J | Partly covered | Demonstrate state updates, route choices, early conversion, deterministic runtime, and cost; avoid unsupported claims of cognition. |
-| A1 | Detect Buying versus Browsing intent | J | Parsed and stored in RC `00f1e41` | Tests must prove detection. If route behavior remains shared, disclose that routing is lightweight and execute W1 before claiming dual-track orchestration. |
+| A1 | Detect Buying versus Browsing intent | J | Implemented in `0ea7705`: distinct `precision` and `discovery` policies with safe route traces | Direct tests prove mode and route selection; `demo.py` shows discovery and override recovery. |
 | A2 | Buying route locks hard constraints for high precision | J | Catalog-signature intersection implements precision | Add explicit route-policy test and trace showing hard constraints narrow only when the intersection stays non-empty. |
-| A3 | Browsing route preserves diversity and supports semantic/cross-category discovery | J/A | Category/BM25 recall exists; dense semantics and explicit diversity are deferred | Execute W1/W3 if time permits; otherwise list this limitation and future work. Do not call BM25 “dense retrieval.” |
-| A4 | Multi-route keyword, category, and vector retrieval | A | Keyword, category, and exact-signature routes exist; vector route absent | W3 defines a reproducible vector experiment. The frozen submission may retain the stronger offline RC if vector retrieval fails adoption gates. |
-| A5 | LLM semantic ranking after retrieval | A | Not in offline RC | W4 defines structured semantic reranking, caching, failure fallback, and cost disclosure. State “no external LLM” if W4 is not adopted. |
+| A3 | Browsing route preserves diversity and supports semantic/cross-category discovery | J/A | Implemented category/BM25/profile recall plus conservative store/title-family coverage; neural semantics absent | Direct family-coverage test and ablation pass. README explicitly limits semantic/cross-category claims. |
+| A4 | Multi-route keyword, category, and vector retrieval | A | Exact, category, keyword/BM25, profile, and fallback routes shipped; dense vector route not adopted | Officially optional. `ABLATION.md` records feasibility blockers and never calls BM25 dense retrieval. |
+| A5 | LLM semantic ranking after retrieval | A | Not adopted in the frozen offline build | Officially optional. Runtime API/model/tokens/cost/network are none/none/0/$0/none and are disclosed consistently. |
 | D1 | Accumulate information across turns | J | Implemented with ordered normalized constraints | Unit test two or more clarification replies and a trace in the demo. |
 | D2 | Erase/rewrite stale slots on Intent Override | J | Implemented, including override eligibility epoch | Test that only the stale value is removed, valid constraints remain, and pre-override ignored targets may be reconsidered. |
 | D3 | Detect candidate-pool overload and proactively clarify | J | Candidate count drives `ask_attribute="other"` | Record candidate-count behavior and show a Browsing or Boundary trace where clarification reduces ambiguity. |
 | D4 | Stay within ten turns and reduce unnecessary conversational load | H/J | Implemented; evaluator enforces ten turns | Turn-10 contract test plus MTTC and Efficiency evidence. Never return an eleventh response. |
 | C1 | Distill accumulated dialog into short-term session context | J | Implemented as category, constraints, mode, seen items, and question history | Document the state schema and show before/after state in one trace without exposing private profile data. |
-| C2 | Use the supplied user profile for personalization | J/A | Profile is safely copied but not used for ranking in RC | Execute W2 before claiming personalized ranking. Otherwise disclose profile-aware ranking as future work. |
+| C2 | Use the supplied user profile for personalization | J/A | Implemented in `0ea7705` as deep-copied, normalized, low-confidence discovery evidence | Profile immutability, isolation, on/off ranking test, public ablation, and dynamic truncation are recorded. |
 | C3 | Maintain “long-term” preference context | J/A | Input profile represents prior preferences; cross-session persistence is intentionally absent | Use only the anonymized supplied profile as a soft prior. Do not invent user identity, persist data across isolated sessions, or claim learned long-term memory. |
-| C4 | Runtime workflow re-orchestration and strategy alignment | J/A | Mode/state exist; route selection is partly implicit | W1/W5 define an explicit deterministic policy over mode, confidence, candidate count, and remaining turns. Log route decisions in test traces, not noisy production output. |
-| C5 | Dynamic truncation, weighting, or slot decay | A | Non-empty-intersection protection and turn-bounded questions exist; confidence/decay absent | W5 may add source, confidence, and last-updated metadata. Hard constraints never decay; only stale soft preferences may decay, with an ablation gate. |
+| C4 | Runtime workflow re-orchestration and strategy alignment | J/A | Four explicit deterministic policies use mode, evidence, pool size, and turn | Safe route histories are asserted in tests and printed only by the demo helper. |
+| C5 | Dynamic truncation, weighting, or slot decay | A | Slot source/confidence/turn/hard metadata and profile truncation are implemented | Hard customer constraints never decay; profile evidence is removed after two explicit constraints and directly tested. |
 | E1 | Hit Rate@K / catalog coverage | H/J | Official evaluator result recorded | Report Hit Rate@10 overall and for all four scenarios, tied to the exact commit. |
 | E2 | MRR / ranking precision | H/J | Official evaluator result recorded | Report MRR and explain ordering signals; do not claim optional numeric recommendation scores affect evaluation. |
 | E3 | MTTC / turns to conversion | H/J | Official evaluator result recorded | Report MTTC and Efficiency; demo must show simultaneous question plus recommendations. |
@@ -1844,14 +1844,14 @@ Requirement classifications used below:
 | R6 | Checksum, data docs, evaluation config, and submission rules | H | Present | Clean-clone audit verifies every documented path and checksum before submission. |
 | R7 | No organizer-provided API key, model access, or credits | H | Offline RC has zero API dependency | If W3/W4 uses a service, use environment variables, separate spend limits, honest cost, and a tested offline fallback. |
 | R8 | Full upstream Amazon dataset reconstruction is unnecessary | A | Covered | Use only the frozen kit unless a legally accessible upstream experiment has a documented need and license. |
-| P1 | Devpost explains approach and problem fit | D | Planned | Copy-ready `DEVPOST.md` plus final Devpost preview audit. |
-| P2 | Devpost lists development tools | D | Planned | List only tools actually used, such as VS Code, Git, Python, SQLite, and Codex if applicable. |
-| P3 | Devpost lists APIs | D | Planned | State “none in frozen runtime” for RC `00f1e41`; never list OpenAI merely because a key was tested separately. |
-| P4 | Devpost lists libraries/frameworks | D | Planned | Current runtime is Python standard library plus SQLite FTS5; list optional experiment libraries only if shipped. |
-| P5 | Devpost lists datasets/assets | D | Planned | Name the organizer-provided frozen Amazon Reviews 2023-derived catalog, public sessions, attribution, and any original diagram assets. |
+| P1 | Devpost explains approach and problem fit | D | Complete copy in `DEVPOST.md` | External Devpost publication/preview requires the team account. |
+| P2 | Devpost lists development tools | D | VS Code, Git/GitHub, Python, SQLite, Codex, and terminal tooling listed | Only tools actually used are named. |
+| P3 | Devpost lists APIs | D | Runtime APIs accurately listed as none | OpenAI is not presented as a runtime API. |
+| P4 | Devpost lists libraries/frameworks | D | Python standard library, SQLite FTS5, and unittest listed | No optional dependency is claimed. |
+| P5 | Devpost lists datasets/assets | D | Frozen catalog/public set, Amazon Reviews 2023 attribution, and original demo assets listed | No unlicensed product/media asset is included. |
 | P6 | Public repository with well-structured, commented code | D | Agent is structured; public visibility pending | Person B reviews comments/readability; signed-out browser verifies public access. |
 | P7 | README overview, setup, installation, reproduction, limitations, improvements, contributions | D | Complete outline exists | Fresh-clone reproduction and two-person content audit are release blockers. |
-| V1 | Short end-to-end demo video | D | Script planned | Show initialization/inference, a Browsing trace, an Override trace, and official metrics from the frozen commit. |
+| V1 | Short end-to-end demo video | D | Executable `demo.py`, captured `DEMO_OUTPUT.md`, and complete `DEMO_SCRIPT.md` are ready | Recording/upload remains an external-account action. |
 | V2 | Video is public on YouTube and linked from Devpost | D | Pending external action | Verify while signed out and capture URL/confirmation. |
 | V3 | Backend walkthrough is acceptable without a UI | D | Covered | Use terminal/API/evaluator evidence; do not add a cosmetic UI. |
 | V4 | No unauthorized trademarks or copyrighted content | H/D | Previously missing | Use original diagrams and terminal recordings; no Amazon logos/pages, webinar clips, product images, copyrighted music, or third-party footage. Use dataset names only for factual attribution. |
@@ -2283,31 +2283,115 @@ the recording yourselves.
 
 In addition to Section 9.12, all of the following must be true:
 
-- [ ] Every row in Section 11.2 is marked with real evidence, an honest deferred
+- [x] Every row in Section 11.2 is marked with real evidence, an honest deferred
       limitation, or an allowed/non-applicable justification.
 - [ ] The README, Devpost, video, code, and metric files describe the same frozen
       architecture—offline or enhanced—with no phantom LLM/vector components.
-- [ ] Buying/Browsing detection, accumulation, Override, Boundary, overload
+- [x] Buying/Browsing detection, accumulation, Override, Boundary, overload
       clarification, and ten-turn behavior have direct test evidence.
-- [ ] Profile use is either implemented and ablated or explicitly disclosed as a
+- [x] Profile use is either implemented and ablated or explicitly disclosed as a
       future enhancement; merely storing it is not called personalization.
-- [ ] Vector and LLM stages are either reproducible, measured, disclosed, and
+- [x] Vector and LLM stages are either reproducible, measured, disclosed, and
       fallback-safe, or honestly omitted under the official optional-model rule.
-- [ ] Hit Rate@10, MRR, MTTC, Efficiency, and TechnicalScore are tied to the
+- [x] Hit Rate@10, MRR, MTTC, Efficiency, and TechnicalScore are tied to the
       frozen commit and shown overall plus per scenario.
-- [ ] Initialization/evaluation runtime, Python/environment, dependencies,
+- [x] Initialization/evaluation runtime, Python/environment, dependencies,
       network, tokens, cost, and memory estimate are recorded.
-- [ ] Catalog/public labels/evaluator are unchanged and no public/private target
+- [x] Catalog/public labels/evaluator are unchanged and no public/private target
       leakage exists.
-- [ ] The secret-history and ignored-file audits pass without printing secrets.
-- [ ] Dataset attribution and all actual tools/APIs/libraries/assets are disclosed.
+- [x] The secret-history and ignored-file audits pass without printing secrets.
+- [x] Dataset attribution and all actual tools/APIs/libraries/assets are disclosed.
 - [ ] Video contains no unauthorized trademark, copyrighted, private, or secret
       material and is public on YouTube.
 - [ ] Public repository and Devpost/video links work while signed out.
-- [ ] Each judging criterion has at least one concrete evidence item and both
+- [x] Each judging criterion has at least one concrete evidence item and both
       teammates can defend the design decisions.
 - [ ] Final submission confirmation, frozen hash/tag, URLs, metrics, and
       environment evidence are retained locally.
 
 Only then is the project fully covered against the workshop brief, official kit,
 submission requirements, and judging matrix.
+
+## 12. Integrated implementation record
+
+This section records execution of the extended plan after the original
+three-hour split ended and one teammate stopped active development. It
+supersedes the historical “current RC” wording elsewhere without erasing the
+control needed for honest comparison.
+
+### 12.1 Selected implementation
+
+```text
+control Agent: 00f1e413f4e984cc9dbfd7e44f2e8c7a051b566f
+enhanced Agent: 0ea7705f9e295855cadc85bd44141b841ff0685f
+runtime: Python standard library + in-memory SQLite FTS5
+external model/API/network: none / none / none
+public Hit@10: 1.000000
+public MRR: 0.709905
+public MTTC: 2.120000
+public Efficiency: 0.888000
+public TechnicalScore: 0.890571
+tests: 23 participant + 3 organizer = 26/26
+```
+
+W1 is implemented through explicit precision, discovery, override-recovery, and
+fallback policies. W2 is implemented as deep-copied supplied-profile
+conditioning with an on/off test and ablation. W5 is implemented through slot
+provenance/confidence/turn metadata, safe route traces, eligibility epochs, and
+dynamic truncation of low-confidence profile evidence. Conservative family
+coverage applies only during unconstrained discovery.
+
+W3 and W4 were evaluated against their feasibility gates and not adopted. The
+official rules make dense and LLM stages optional; no reproducible licensed
+vector/model artifact with a justified score gain was established. The final
+artifacts consistently disclose category/signature/BM25/profile retrieval, no
+dense or neural semantic claim, zero model tokens/cost, and no network reliance.
+
+### 12.2 Completed internal deliverables
+
+- `starter/agent.py`: integrated production Agent.
+- `tests/test_agent.py`: routing, profile, diversity, state, failure, and
+  contract tests.
+- `ablate.py` and `ABLATION.md`: reproducible feature-off experiments and
+  commit-linked results.
+- `demo.py` and `DEMO_OUTPUT.md`: executable and captured end-to-end inference.
+- `README.md`: setup, architecture, reproduction, metrics, limitations,
+  attribution, contributions, and release procedure.
+- `DEVPOST.md`: copy-ready submission narrative covering tools, APIs,
+  libraries, data/assets, cost, impact, and limitations.
+- `DEMO_SCRIPT.md`: timed live-demo plan, evidence list, IP/safety checks, and
+  publication checklist.
+- `NOTES.md`: evaluator/catalog facts, requirement coverage, performance,
+  security, and final-evaluation boundary.
+
+### 12.3 Verified evidence
+
+- Protected catalog, public set, evaluator, and official docs are unchanged from
+  `origin/main`.
+- Catalog has 50,000 unique parent ASINs and both published checksums match.
+- Two enhanced evaluator outputs are byte-identical with SHA-256
+  `0faad255af1b1ad12fca5923fd124e0192594e88f348bc3e3bd5caa5f3cdad71`.
+- Full Git-history secret-pattern scan reports zero matching blob paths without
+  printing repository contents.
+- `.env`, decompressed catalog, result JSON, caches, and vector artifacts remain
+  ignored and untracked.
+- Production Agent imports no public targets/scenarios and performs no network
+  or environment-secret lookup.
+- Local Markdown links, placeholder scan, private-path scan, compilation,
+  `git diff --check`, and all 26 tests pass.
+- The public repository and three upstream resource pages were verified from a
+  signed-out web context on 2026-09-01.
+
+### 12.4 External account actions still required
+
+Code cannot create or submit a YouTube/Devpost entry without the team's accounts.
+The unchecked external definition-of-done groups above therefore remain
+intentionally open until the owner:
+
+1. records and publicly uploads the run in `DEMO_SCRIPT.md`;
+2. publishes `DEVPOST.md` and inserts the public YouTube URL;
+3. verifies repository/video/Devpost links while signed out; and
+4. retains submission confirmation, URLs, and the exact `submission-v1` SHA.
+
+All source, runtime, evidence, and copy required for those account actions is
+present in the repository.
