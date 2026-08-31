@@ -326,10 +326,14 @@ The evaluator removes invalid and duplicate ASINs within the current response.
 It does not impose a separate cross-turn penalty or cross-turn deduplication.
 
 If an ASIN was shown earlier and the session continued, that ASIN was not the
-target. It is therefore safe and beneficial to exclude it on later turns.
+target **except before an Intent Override becomes score-eligible**. The evaluator
+ignores target recommendations before the configured override turn, so a
+pre-override recommendation is not evidence of a miss.
 
 **Sprint consequence:** maintain a per-session `seen_asins` set and fill each
-turn with unseen candidates.
+ordinary turn with unseen candidates. When the explicit override arrives, clear
+or separately scope the pre-override seen set so an early ignored target remains
+eligible after the evaluator begins scoring that session.
 
 #### Q4 — MRR
 
@@ -423,6 +427,8 @@ Rules:
 - Treat "I don't have a preference" as no new evidence; do not exclude products.
 - On override, remove only `old_preference`, add the new requirement, and retain
   independently disclosed hard constraints.
+- Treat recommendations made before an explicit Intent Override as a separate
+  eligibility epoch; reset their seen status when the override arrives.
 - Never share mutable state between session IDs.
 - Validate that `reset()` was called before `respond()`.
 
@@ -458,7 +464,7 @@ prevents a missing or ambiguous field from deleting the target.
 
 After ranking:
 
-1. Remove ASINs already in `seen_asins`.
+1. Remove ASINs already in the current eligibility epoch's `seen_asins`.
 2. Take up to `top_k` candidates.
 3. If fewer than `top_k` remain, fill from unseen BM25/category/global fallback
    candidates.
@@ -820,7 +826,8 @@ Person A should check these off in order:
 - [ ] Boundary/no-preference message does not eliminate candidates.
 - [ ] Exact signature route works when constraints match.
 - [ ] BM25 route works when signatures do not match.
-- [ ] Previous ASINs are not recommended again.
+- [ ] Previous ASINs are not recommended again within the same scoring epoch;
+      the explicit override transition resets pre-eligibility history.
 - [ ] Every turn returns up to ten recommendations.
 - [ ] Clarification turns also contain recommendations.
 - [ ] `message` is always a string.
@@ -1196,7 +1203,7 @@ SessionState
   seen_asins: set[str]
   asked_attributes: list[str]
   last_candidate_count: int
-  last_message: str
+  last_message: str                     optional when respond passes it directly
 ```
 
 Invariants:
@@ -1204,8 +1211,9 @@ Invariants:
 - Exactly one state object per active session ID.
 - Constraints are normalized, unique, and ordered by disclosure time.
 - `old_preference` is removed on override but other constraints remain.
-- `seen_asins` contains exactly the valid ASINs previously returned for that
-  session.
+- `seen_asins` contains the valid ASINs returned in the current scoring epoch.
+  The explicit Intent Override transition starts a new epoch because the
+  evaluator ignores otherwise-correct recommendations before that turn.
 - No mutable collection is shared across sessions.
 
 #### ParsedTurn
@@ -1332,7 +1340,7 @@ Initialization acceptance criteria:
 |---|---|---|---|
 | New | Buying opening | Set category; add first hard constraint | Buying |
 | New | Browsing opening | Set category; no constraint yet | Browsing |
-| New | Category plus old preference | Set category and `old_preference`; add it provisionally | Override candidate |
+| New | Category plus old preference | Set category and `old_preference`; do not rank by the explicitly stale value | Override candidate |
 | Any | Constraint reply | Append each new normalized value in message order | Same mode |
 | Override candidate | Explicit override | Remove old preference only; add replacement | Override |
 | Any | No-preference reply | Add no constraint; keep pool; mark boundary when appropriate | Boundary/current |
@@ -1345,6 +1353,8 @@ Additional rules:
   explicitly indicates replacement. Do not erase state based on a weak lexical
   guess.
 - An override replacement already present in constraints remains once.
+- The explicit override starts a new recommendation-eligibility epoch; clear or
+  re-scope pre-override seen ASINs so an ignored early target can be shown again.
 - A no-preference response is not negative evidence against products that contain
   the named attribute.
 - State updates occur before retrieval on each turn.
@@ -1542,7 +1552,8 @@ before the integration gate.
 | P0 | Response schema | One valid reset/respond | All required keys and correct types |
 | P0 | Valid ASINs | Mini catalog plus response | Every result belongs to mini catalog |
 | P0 | Unique current list | Candidate ties | No repeated ASIN in response |
-| P0 | Cross-turn dedupe | Two turns, no target stop | Second list excludes first list |
+| P0 | Cross-turn dedupe | Two turns in one scoring epoch, no target stop | Second list excludes first list |
+| P0 | Override eligibility epoch | Recommend candidates before and after explicit override | Post-override results may revisit pre-eligibility candidates but remain unique afterward |
 | P0 | Session isolation | Interleave two session IDs | Constraints/seen sets never cross |
 | P0 | Buying parse | Buying opening | Category and hard constraint stored |
 | P0 | Browsing parse | Browsing opening | Category stored, no fabricated constraint |
@@ -1746,3 +1757,557 @@ Do not accidentally expand the final product into any of the following:
 - claims of private-set performance before that set is released.
 
 These are appropriate future-work items only when they support the product story.
+
+---
+
+## 11. Workshop-brief traceability and complete coverage plan
+
+This section maps the complete “Shopping Copilot: AI Conversational Search and
+Recommendations” workshop brief to the implementation, evidence, and submission.
+It exists to prevent two opposite mistakes:
+
+1. omitting a judged requirement because it was not directly scored by the local
+   evaluator; or
+2. claiming an aspirational component such as dense retrieval or an LLM when the
+   frozen build does not actually contain it.
+
+### 11.1 Source precedence and requirement interpretation
+
+Use this precedence whenever sources appear inconsistent:
+
+1. `docs/submission_rules.md`, `docs/competition_specification.md`,
+   `docs/final_evaluation_faq.md`, and `docs/agent_api_contract.json`;
+2. the unmodified official evaluator and evaluation configuration;
+3. the published workshop brief and any recorded Q&A clarification; and
+4. this implementation plan.
+
+The official kit explicitly allows keyword, rule-based, dense, hybrid, local
+model, and external API approaches; an external LLM is optional. Therefore,
+workshop phrases such as “LLM semantic ranking” describe a desired architecture
+direction, not permission to misrepresent the actual offline solution. Likewise,
+items listed as “in scope” are allowed techniques, not a requirement to include
+every technique regardless of measured value.
+
+If the webinar Q&A contains a clarification not present in the written brief,
+record the exact timestamp and a short paraphrase in `NOTES.md`. Do not copy
+video, slides, or long transcripts into the repository, and do not allow a
+paraphrased Q&A answer to override the official written rules without organizer
+confirmation.
+
+Requirement classifications used below:
+
+- **H — hard:** interface, data, scope, security, or submission rule; blocks
+  release when unmet.
+- **J — judged:** affects judging quality and must have honest evidence, but does
+  not prescribe one implementation.
+- **A — allowed/aspirational:** an endorsed method to evaluate experimentally;
+  adopt only when measured and reproducible.
+- **D — deliverable:** required written, repository, video, or link artifact.
+
+### 11.2 Complete requirements coverage matrix
+
+| ID | Workshop requirement | Class | Current coverage | Required evidence or remaining action |
+|---|---|---:|---|---|
+| B1 | Explain why static keyword search fails for evolving, ambiguous intent | J | Covered in Sections 6, 9.9, and 9.10 | README, Devpost, and demo must connect ambiguity and intent change to user/business value rather than only describing code. |
+| B2 | Build a next-generation shopping agent with cognitive understanding, runtime agility, and commercial efficiency | J | Partly covered | Demonstrate state updates, route choices, early conversion, deterministic runtime, and cost; avoid unsupported claims of cognition. |
+| A1 | Detect Buying versus Browsing intent | J | Parsed and stored in RC `00f1e41` | Tests must prove detection. If route behavior remains shared, disclose that routing is lightweight and execute W1 before claiming dual-track orchestration. |
+| A2 | Buying route locks hard constraints for high precision | J | Catalog-signature intersection implements precision | Add explicit route-policy test and trace showing hard constraints narrow only when the intersection stays non-empty. |
+| A3 | Browsing route preserves diversity and supports semantic/cross-category discovery | J/A | Category/BM25 recall exists; dense semantics and explicit diversity are deferred | Execute W1/W3 if time permits; otherwise list this limitation and future work. Do not call BM25 “dense retrieval.” |
+| A4 | Multi-route keyword, category, and vector retrieval | A | Keyword, category, and exact-signature routes exist; vector route absent | W3 defines a reproducible vector experiment. The frozen submission may retain the stronger offline RC if vector retrieval fails adoption gates. |
+| A5 | LLM semantic ranking after retrieval | A | Not in offline RC | W4 defines structured semantic reranking, caching, failure fallback, and cost disclosure. State “no external LLM” if W4 is not adopted. |
+| D1 | Accumulate information across turns | J | Implemented with ordered normalized constraints | Unit test two or more clarification replies and a trace in the demo. |
+| D2 | Erase/rewrite stale slots on Intent Override | J | Implemented, including override eligibility epoch | Test that only the stale value is removed, valid constraints remain, and pre-override ignored targets may be reconsidered. |
+| D3 | Detect candidate-pool overload and proactively clarify | J | Candidate count drives `ask_attribute="other"` | Record candidate-count behavior and show a Browsing or Boundary trace where clarification reduces ambiguity. |
+| D4 | Stay within ten turns and reduce unnecessary conversational load | H/J | Implemented; evaluator enforces ten turns | Turn-10 contract test plus MTTC and Efficiency evidence. Never return an eleventh response. |
+| C1 | Distill accumulated dialog into short-term session context | J | Implemented as category, constraints, mode, seen items, and question history | Document the state schema and show before/after state in one trace without exposing private profile data. |
+| C2 | Use the supplied user profile for personalization | J/A | Profile is safely copied but not used for ranking in RC | Execute W2 before claiming personalized ranking. Otherwise disclose profile-aware ranking as future work. |
+| C3 | Maintain “long-term” preference context | J/A | Input profile represents prior preferences; cross-session persistence is intentionally absent | Use only the anonymized supplied profile as a soft prior. Do not invent user identity, persist data across isolated sessions, or claim learned long-term memory. |
+| C4 | Runtime workflow re-orchestration and strategy alignment | J/A | Mode/state exist; route selection is partly implicit | W1/W5 define an explicit deterministic policy over mode, confidence, candidate count, and remaining turns. Log route decisions in test traces, not noisy production output. |
+| C5 | Dynamic truncation, weighting, or slot decay | A | Non-empty-intersection protection and turn-bounded questions exist; confidence/decay absent | W5 may add source, confidence, and last-updated metadata. Hard constraints never decay; only stale soft preferences may decay, with an ablation gate. |
+| E1 | Hit Rate@K / catalog coverage | H/J | Official evaluator result recorded | Report Hit Rate@10 overall and for all four scenarios, tied to the exact commit. |
+| E2 | MRR / ranking precision | H/J | Official evaluator result recorded | Report MRR and explain ordering signals; do not claim optional numeric recommendation scores affect evaluation. |
+| E3 | MTTC / turns to conversion | H/J | Official evaluator result recorded | Report MTTC and Efficiency; demo must show simultaneous question plus recommendations. |
+| E4 | Combined TechnicalScore | H/J | Formula and baseline covered | Reproduce with the unmodified evaluator and retain the full `results.json` locally. |
+| S1 | Backend/headless only; UI is out of scope | H | Covered | Do not spend sprint time on a UI. Demo the evaluator, API contract, traces, and results. |
+| S2 | No full-parameter foundation-model fine-tuning | H | Covered | Dependency/model audit must show no training or fine-tuned artifact. Prompt iteration or local scoring is allowed when disclosed. |
+| S3 | No heavy external vector database; execution is in memory | H | Covered | Inspect dependencies and network calls; any vector experiment must use an in-memory local index. |
+| S4 | Text and structured metadata only; no multimodal processing | H | Covered | Demo and code must not depend on product images, audio, OCR, or vision models. |
+| S5 | Catalog is immutable; no mock/injected ASINs | H | Covered and hash-audited | Verify catalog checksum before and after evaluation; validate every output against loaded catalog IDs. |
+| S6 | Inputs may be treated as pre-cleaned; no typo/ASR pipeline required | A | Covered as an explicit non-goal | Do not claim spelling/voice robustness. Unknown text still receives a safe lexical fallback. |
+| S7 | Static catalog/pricing/category tree during the event | H | Architecture assumes one initialization | Load and index once; do not implement live refresh or mutate product records. |
+| S8 | Isolated single-user sessions; concurrency stress not required | H | Per-session isolated state implemented | Interleaved-session test proves no shared mutable state; do not claim production concurrency guarantees. |
+| R1 | Frozen 50,000-item Amazon Reviews 2023-derived catalog | H | Indexed and checksum-verified | README must identify the exact category, checksum procedure, source attribution, and decompression command. |
+| R2 | 200 public development sessions | H | Used through official evaluator | Metrics must be labeled “public development”; do not embed labels or target ASINs in Agent code. |
+| R3 | 800 private final sessions with separate users and targets | H | Generalization constraint covered | Never claim private performance early; after release, evaluate the frozen commit without changes and retain evidence. |
+| R4 | Weak BM25 starter and deterministic evaluator | H | Baseline reproduced | Record baseline commit, exact command, baseline metrics, and final delta in `ABLATION.md`. |
+| R5 | Published Agent interface and machine-readable contract | H | Implemented | Contract tests cover required fields, types, allowed attributes, valid unique ASINs, `top_k`, and honest usage. |
+| R6 | Checksum, data docs, evaluation config, and submission rules | H | Present | Clean-clone audit verifies every documented path and checksum before submission. |
+| R7 | No organizer-provided API key, model access, or credits | H | Offline RC has zero API dependency | If W3/W4 uses a service, use environment variables, separate spend limits, honest cost, and a tested offline fallback. |
+| R8 | Full upstream Amazon dataset reconstruction is unnecessary | A | Covered | Use only the frozen kit unless a legally accessible upstream experiment has a documented need and license. |
+| P1 | Devpost explains approach and problem fit | D | Planned | Copy-ready `DEVPOST.md` plus final Devpost preview audit. |
+| P2 | Devpost lists development tools | D | Planned | List only tools actually used, such as VS Code, Git, Python, SQLite, and Codex if applicable. |
+| P3 | Devpost lists APIs | D | Planned | State “none in frozen runtime” for RC `00f1e41`; never list OpenAI merely because a key was tested separately. |
+| P4 | Devpost lists libraries/frameworks | D | Planned | Current runtime is Python standard library plus SQLite FTS5; list optional experiment libraries only if shipped. |
+| P5 | Devpost lists datasets/assets | D | Planned | Name the organizer-provided frozen Amazon Reviews 2023-derived catalog, public sessions, attribution, and any original diagram assets. |
+| P6 | Public repository with well-structured, commented code | D | Agent is structured; public visibility pending | Person B reviews comments/readability; signed-out browser verifies public access. |
+| P7 | README overview, setup, installation, reproduction, limitations, improvements, contributions | D | Complete outline exists | Fresh-clone reproduction and two-person content audit are release blockers. |
+| V1 | Short end-to-end demo video | D | Script planned | Show initialization/inference, a Browsing trace, an Override trace, and official metrics from the frozen commit. |
+| V2 | Video is public on YouTube and linked from Devpost | D | Pending external action | Verify while signed out and capture URL/confirmation. |
+| V3 | Backend walkthrough is acceptable without a UI | D | Covered | Use terminal/API/evaluator evidence; do not add a cosmetic UI. |
+| V4 | No unauthorized trademarks or copyrighted content | H/D | Previously missing | Use original diagrams and terminal recordings; no Amazon logos/pages, webinar clips, product images, copyrighted music, or third-party footage. Use dataset names only for factual attribution. |
+| J1 | Technical Execution, 35% | J | Strong measured RC | Evidence: architecture, code review, tests, deterministic evaluator, fallback, runtime, and commit-linked metrics. |
+| J2 | Innovation & Problem Insight, 20% | J | Sequential-experiment framing covered | Explain why each turn jointly selects products and information; distinguish this insight from generic “AI search.” |
+| J3 | Impact & Relevance, 20% | J | Needs explicit user/business narrative | Tie fewer turns and better rank to reduced search friction, discovery, conversion opportunity, and applicability beyond one dataset without inventing business results. |
+| J4 | Feasibility & Practicality, 15% | J | Offline RC is strong | Report CPU, memory, initialization, response/evaluation latency, dependencies, network reliance, token use, cost, and fallback. |
+| J5 | Presentation & Communication, 10% at finals | J | Script exists | Prepare coherent problem→insight→architecture→demo→evidence→impact story and Q&A answers for every non-obvious design choice. |
+
+No row may be changed to “covered” because it appears in prose alone. Coverage
+requires code, test output, measured evidence, or a completed external artifact.
+
+### 11.3 Preserve the measured offline release candidate
+
+The current measured Person A candidate is:
+
+```text
+branch: feat/agent
+commit: 00f1e41
+runtime dependencies: Python standard library and SQLite FTS5
+external model/API at runtime: none
+public Hit Rate@10: 1.000000
+public MRR: 0.707655
+public MTTC: 2.120000
+public TechnicalScore: 0.889896
+```
+
+This commit remains the control for every enhancement. Do not rewrite or force
+move it. Run workshop-alignment experiments on named branches from this commit,
+and retain the offline candidate when an experiment fails its adoption gate.
+The very high public result makes private-set generalization, honesty, and
+reproducibility more important—not less. It must never be described as private
+performance or as proof that optional dense/LLM components are unnecessary in
+real-world commerce.
+
+### 11.4 Workshop-alignment enhancement tracks
+
+These tracks close the genuine gaps in the coverage matrix. They are ordered by
+benefit-to-risk. Each track is independently measured; do not bundle them into
+one unexplainable score change.
+
+#### W1 — Make intent routing behaviorally explicit
+
+Goal: move from “mode is parsed” to distinct route policies.
+
+Buying route:
+
+- treat disclosed hard constraints as safe intersections when non-empty;
+- prioritize exact signature position and category;
+- ask only while ambiguity remains; and
+- retain BM25 as a recall fallback.
+
+Browsing route:
+
+- treat inferred/profile preferences as soft signals, never destructive filters;
+- use broader category and lexical pools;
+- diversify the ten returned products by normalized brand/title family when
+  doing so does not remove the target from the measured Top 10; and
+- ask an early structured clarification when the pool exceeds the validated
+  ambiguity cutoff.
+
+Override and Boundary routes:
+
+- recompute after selective stale-slot erasure;
+- start a new recommendation-eligibility epoch on explicit override;
+- treat “no preference” as neutral evidence; and
+- prefer unseen coverage while clarification remains useful.
+
+Acceptance evidence:
+
+- unit tests show each opening selects the expected route;
+- a route trace records mode, candidate count, chosen route, and question policy;
+- no empty recommendation lists or contract regressions;
+- overall and per-scenario evaluator results beat or tie the control within the
+  predeclared noise/regression tolerance.
+
+#### W2 — Personalized context distillation without unsafe persistence
+
+Goal: use the supplied anonymized profile honestly.
+
+At `reset()` derive a compact, immutable profile context from only documented
+fields such as `preference_tags` and `summary`. Normalize it once, keep it inside
+that session, and use it as a soft lexical/dense prior. Do not:
+
+- infer identity or demographics;
+- persist state across evaluator sessions;
+- treat generic tags such as “comfort” as hard filters;
+- log full profiles in normal output; or
+- claim the Agent learns a durable user model when it only consumes the supplied
+  prior profile.
+
+Acceptance evidence:
+
+- profile input remains unmodified;
+- interleaved sessions do not leak tags;
+- an ablation compares profile-off versus profile-on;
+- the 40-session holdout and weakest scenario do not regress materially; and
+- README describes this as supplied-profile conditioning, not persistent memory.
+
+#### W3 — Reproducible in-memory vector retrieval
+
+Goal: test the workshop’s dense/vector route without an external vector DB.
+
+Before implementation, decide and document:
+
+1. embedding model/provider and license;
+2. exact catalog text composition;
+3. vector dimension and numeric dtype;
+4. artifact size, checksum, storage/distribution method, and regeneration path;
+5. query-time network requirement;
+6. dependency versions and supported Python version;
+7. one-time generation cost and expected per-evaluation cost; and
+8. behavior when the vector asset or service is unavailable.
+
+Implementation contract:
+
+- generate catalog vectors once, never once per session;
+- keep the search index in process memory;
+- normalize vectors and use deterministic cosine similarity;
+- create distinct dense-message and dense-profile candidate lists;
+- fuse exact signature, BM25, category, dense-message, and dense-profile ranks
+  with a documented method such as RRF;
+- keep exact hard constraints above semantic similarity for Buying; and
+- fall back to the measured offline Agent on any load, network, or model failure.
+
+Do not commit an oversized or unlicensed artifact merely to satisfy a diagram.
+If the asset cannot be reproduced from the public bundle or distributed within
+the submission rules, W3 fails feasibility even if its local score is higher.
+
+Acceptance evidence:
+
+- retrieval ablation by route;
+- deterministic catalog-vector checksum;
+- measured initialization, response latency, memory, tokens, and cost;
+- fresh-machine setup test; and
+- measurable holdout or Browsing improvement without a damaging Buying,
+  Override, or Boundary regression.
+
+#### W4 — Structured LLM semantic ranking
+
+Goal: evaluate the optional semantic-ranking stage without allowing it to make
+the system brittle or unreproducible.
+
+Design:
+
+1. retrieve a bounded candidate set locally first;
+2. ask the model for structured query/target attributes and confidences, or for
+   a schema-constrained comparison over the bounded candidates;
+3. validate every returned field and ignore unknown product IDs;
+4. combine semantic evidence with exact constraints—never let a fluent output
+   override an explicit hard mismatch;
+5. cache deterministic development calls by prompt/model/schema hash;
+6. report actual prompt/completion tokens, latency, retries, and estimated cost;
+7. enforce a request/cost ceiling and a timeout; and
+8. fall back to the offline ordering on exception, timeout, invalid JSON, quota,
+   or missing credentials.
+
+Security and reproducibility:
+
+- credential name is documented, value is never committed;
+- `.env` and caches containing sensitive prompts remain ignored;
+- model identifier and parameters are frozen;
+- prompts are versioned in source or a small declared config;
+- the demo and Devpost name the API only if the frozen runtime uses it; and
+- the evaluator still receives honest `usage` values.
+
+Acceptance evidence:
+
+- cache-hit and cache-miss tests;
+- invalid-response and no-key fallback tests;
+- an LLM-off versus LLM-on ablation;
+- no lower reliability than the control; and
+- a score/quality gain large enough to justify added latency, cost, network, and
+  setup risk.
+
+#### W5 — Adaptive orchestration, dynamic truncation, and slot confidence
+
+Goal: make runtime adaptation explicit and testable rather than an unbounded
+collection of heuristics.
+
+Extend each non-hard slot conceptually with:
+
+```text
+value
+source: opening | clarification | profile | inferred
+confidence
+introduced_turn
+last_confirmed_turn
+hard: bool
+```
+
+At every turn, the orchestrator chooses from a small deterministic policy table:
+
+```text
+parse/update state
+  → compute candidate count and evidence confidence
+  → select precision, recall/diversity, override-recovery, or fallback route
+  → decide whether another clarification has positive expected value
+  → rank and return recommendations in the same response
+```
+
+Rules:
+
+- explicit customer hard constraints never decay;
+- an explicit override erases the named stale slot immediately;
+- supplied profile preferences and inferred soft slots may decay only after a
+  predeclared number of contradictory/unconfirmed turns;
+- dynamic truncation drops low-confidence soft evidence before it drops catalog
+  candidates that satisfy hard constraints;
+- the final turn never asks an unusable follow-up; and
+- all thresholds have a reason and an ablation record.
+
+Acceptance evidence:
+
+- transition-table tests cover accumulation, contradiction, override, Boundary,
+  decay, and turn 10;
+- policy decisions are deterministic;
+- no scenario regression is hidden by a higher overall score; and
+- complexity is retained only if it improves measured quality or produces a
+  materially stronger real-world demonstration.
+
+### 11.5 Experiment and adoption protocol
+
+Use the same protocol for W1–W5:
+
+1. Branch from the frozen control commit and name one hypothesis.
+2. Declare the expected metric/scenario improvement and possible failure mode.
+3. Keep a fixed 160-session development split and an untouched 40-session
+   holdout. Preserve scenario representation and record the split procedure.
+4. Run contract tests and the development evaluator.
+5. Record overall Hit Rate@10, MRR, MTTC, Efficiency, TechnicalScore, all four
+   scenario tables, runtime, memory when relevant, tokens, and cost.
+6. Reject changes smaller than the predeclared noise threshold unless they close
+   a hard correctness/reliability gap.
+7. Open the holdout only for a candidate that passed the development gate.
+8. Compare against commit `00f1e41`, not against memory or an uncommitted tree.
+9. Commit accepted and rejected results to `ABLATION.md`; rejected code need not
+   be merged.
+10. Freeze one measured candidate. Never combine individually positive changes
+    without measuring the combination.
+
+Additional adoption blockers:
+
+- any invalid/empty response;
+- any evaluator/public-label/catalog modification;
+- secret exposure;
+- undeclared network or dependency requirement;
+- non-reproducible generated assets;
+- major per-scenario regression;
+- misleading documentation; or
+- a component that cannot run from the submitted bundle.
+
+### 11.6 End-to-end architecture contract
+
+The complete architecture, when optional tracks are adopted, is:
+
+```text
+frozen catalog
+  → immutable product records
+  → exact category/constraint indexes + BM25 + optional dense vectors
+
+profile + current message + prior session state
+  → template/generic parser
+  → selective state update and override erasure
+  → intent/orchestration policy
+  → precision candidates + lexical candidates + optional dense candidates
+  → deterministic fusion
+  → optional bounded structured semantic reranking
+  → validity, family diversity, and scoring-epoch de-duplication
+  → Top 10 recommendations + optional structured clarification + honest usage
+```
+
+Failure behavior is part of the architecture, not an afterthought:
+
+- exact lookup miss keeps the last non-empty candidate pool;
+- BM25 error falls back to category/global deterministic order;
+- vector/model error falls back to the offline control route;
+- malformed customer text is treated as soft lexical context;
+- no-preference is neutral;
+- missing optional catalog metadata never aborts initialization; and
+- a response-construction error still produces a valid list from loaded ASINs.
+
+### 11.7 Full verification matrix
+
+Person B should add or retain tests/evidence for all applicable rows:
+
+| Area | Required verification |
+|---|---|
+| Interface | Reset required; fields/types; allowed `ask_attribute`; valid unique ASINs; `top_k`; non-negative honest usage. |
+| Catalog | Exactly 50,000 unique records; checksum unchanged; null/missing optional metadata safe; no writes or injected IDs. |
+| Intent | Buying, Browsing, Override candidate, explicit Override, Boundary, and unknown-message routing. |
+| State | Ordered accumulation; duplicate constraint suppression; selective erasure; eligibility-epoch reset; interleaved-session isolation. |
+| Retrieval | Exact position priority; safe failed intersection; BM25 fallback; category/global fill; optional dense route and fusion ablations. |
+| Dialogue | Clarification plus recommendations; overload question; neutral no-preference; useful question cutoff; no turn-10 question. |
+| Personalization | Profile immutability and isolation; profile-off/on ablation if used; no hard filtering from weak profile tags. |
+| Semantic model | Structured validation, cache, timeout, error/no-key fallback, token/cost accounting if used. |
+| Metrics | Baseline reproduction; final overall/scenario metrics; deterministic repeat; frozen-commit hash; unmodified evaluator. |
+| Performance | Initialization, average/p95 response latency when measurable, full evaluator runtime, peak memory estimate, dependency/network disclosure. |
+| Generalization | Fixed holdout; no public ASIN/string hardcoding; separate-user/private-set caveat; no private result claim. |
+| Security | `.env` ignored; secret-history scan; caches reviewed; no credential in logs, screenshots, video, or docs. |
+| Reproduction | Clean clone; checksum; decompression; dependency installation; one evaluation command; expected outputs. |
+
+### 11.8 Deliverable content and external-asset audit
+
+#### Devpost
+
+The final Devpost description must explicitly contain:
+
+- how the system addresses evolving Buying, Browsing, Override, and Boundary
+  behavior;
+- the sequential-experiment insight and why it matters;
+- actual development tools;
+- actual runtime APIs, with “none” when appropriate;
+- actual libraries/frameworks;
+- the frozen dataset and any assets;
+- architecture and fallback behavior;
+- public development metrics labeled correctly;
+- runtime, tokens, estimated cost, and network dependency;
+- limitations and credible next steps;
+- concrete team-member contributions;
+- public repository URL; and
+- public YouTube URL.
+
+#### Public repository and README
+
+The signed-out repository audit must prove:
+
+- source files and required lightweight assets are present;
+- code comments explain non-obvious behavior rather than restating syntax;
+- README setup works from a clean clone;
+- checksum and catalog setup commands are correct;
+- one documented command reproduces evaluation;
+- metrics match the frozen commit;
+- limitations distinguish template-aware public evaluation from real customer
+  language;
+- data attribution and license/source links are present;
+- contributions name what each person actually produced; and
+- no ignored/private/evidence-only file was accidentally committed.
+
+#### Demo video
+
+The video acceptance checklist is:
+
+- concise end-to-end execution, not slides alone;
+- one Browsing flow and one Intent Override flow;
+- aggregate and per-scenario metrics from the frozen commit;
+- clear statement of runtime architecture, dependencies, cost, and fallback;
+- readable terminal text with no `.env`, key, profile details, or sensitive path;
+- original diagrams only;
+- no Amazon or third-party logos, product-page captures, product images,
+  webinar/slide footage, copyrighted music, or unlicensed media;
+- dataset/source attribution in narration or closing frame;
+- public YouTube visibility verified while signed out;
+- URL placed in Devpost and tested; and
+- final video file/URL captured in the local evidence package.
+
+### 11.9 Judging-evidence plan
+
+Do not expect the technical score to tell the whole story. Prepare explicit
+evidence for every judging criterion.
+
+#### Technical Execution — 35%
+
+- architecture diagram matches frozen code;
+- deterministic contract/state tests;
+- baseline-to-final and per-scenario metrics;
+- immutable in-memory indexing and graceful fallback;
+- clean repository and reproducible command; and
+- clear explanation of why exact signature position outranks popularity.
+
+#### Innovation & Problem Insight — 20%
+
+- frame the problem as sequential experiment design under a ten-turn budget;
+- show that each response jointly chooses information and product exposure;
+- explain eligibility epochs for Intent Override; and
+- distinguish the approach from a generic chatbot or keyword wrapper.
+
+#### Impact & Relevance — 20%
+
+- identify user outcomes: less search friction, better discovery, quicker
+  convergence, and graceful handling of changing needs;
+- identify plausible stakeholder value without claiming unmeasured conversion or
+  revenue lift;
+- explain applicability to other structured catalogs; and
+- acknowledge where real-world language, inventory, and policy would require
+  more work.
+
+#### Feasibility & Practicality — 15%
+
+- quantify startup/evaluation latency and memory;
+- disclose zero runtime model cost for the offline RC or actual cost for an
+  adopted semantic route;
+- describe network independence or tested fallback;
+- show frozen, read-only data and deterministic output; and
+- explain deployment assumptions and operational limitations honestly.
+
+#### Presentation & Communication — 10% at finals
+
+- rehearse a single coherent problem→insight→design→demo→evidence→impact story;
+- keep every claim tied to visible code or a measured artifact;
+- prepare answers for constants, route choice, template dependence, high public
+  score, private generalization, profile use, cost, and failure behavior; and
+- ensure both teammates can explain the whole system, not only their assigned
+  files.
+
+### 11.10 Resource and provenance inventory
+
+The submission should preserve or link the authoritative resources named in the
+workshop brief:
+
+- participant repository:
+  `https://github.com/TechJam2026/techjam-conversational-search`;
+- participant-kit release:
+  `https://github.com/TechJam2026/techjam-conversational-search/releases/tag/participant-kit`;
+- original Amazon Reviews 2023 documentation:
+  `https://amazon-reviews-2023.github.io/`;
+- local organizer documents under `docs/`;
+- `DATA_ATTRIBUTION.md`;
+- `SHA256SUMS`; and
+- the 28 Aug Shopping Copilot workshop recording, when available to the team.
+
+Before submission, verify the upstream URLs still open, but do not silently
+replace the frozen local kit from upstream. Record the local kit commit and
+catalog checksum as the actual evaluated artifacts. Link to the recording only
+when the organizer supplied a public/shareable URL; never upload or redistribute
+the recording yourselves.
+
+### 11.11 Final workshop-complete definition of done
+
+In addition to Section 9.12, all of the following must be true:
+
+- [ ] Every row in Section 11.2 is marked with real evidence, an honest deferred
+      limitation, or an allowed/non-applicable justification.
+- [ ] The README, Devpost, video, code, and metric files describe the same frozen
+      architecture—offline or enhanced—with no phantom LLM/vector components.
+- [ ] Buying/Browsing detection, accumulation, Override, Boundary, overload
+      clarification, and ten-turn behavior have direct test evidence.
+- [ ] Profile use is either implemented and ablated or explicitly disclosed as a
+      future enhancement; merely storing it is not called personalization.
+- [ ] Vector and LLM stages are either reproducible, measured, disclosed, and
+      fallback-safe, or honestly omitted under the official optional-model rule.
+- [ ] Hit Rate@10, MRR, MTTC, Efficiency, and TechnicalScore are tied to the
+      frozen commit and shown overall plus per scenario.
+- [ ] Initialization/evaluation runtime, Python/environment, dependencies,
+      network, tokens, cost, and memory estimate are recorded.
+- [ ] Catalog/public labels/evaluator are unchanged and no public/private target
+      leakage exists.
+- [ ] The secret-history and ignored-file audits pass without printing secrets.
+- [ ] Dataset attribution and all actual tools/APIs/libraries/assets are disclosed.
+- [ ] Video contains no unauthorized trademark, copyrighted, private, or secret
+      material and is public on YouTube.
+- [ ] Public repository and Devpost/video links work while signed out.
+- [ ] Each judging criterion has at least one concrete evidence item and both
+      teammates can defend the design decisions.
+- [ ] Final submission confirmation, frozen hash/tag, URLs, metrics, and
+      environment evidence are retained locally.
+
+Only then is the project fully covered against the workshop brief, official kit,
+submission requirements, and judging matrix.
