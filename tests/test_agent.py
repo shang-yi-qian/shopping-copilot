@@ -278,7 +278,7 @@ class AgentContractTest(unittest.TestCase):
         self.assertTrue(all(slot["source"] == "profile" for slot in profile_slots))
         self.assertTrue(all(not slot["hard"] for slot in profile_slots))
 
-    def test_supplied_profile_is_a_soft_deterministic_tie_break(self) -> None:
+    def test_supplied_profile_is_a_soft_deterministic_rank_signal(self) -> None:
         profile = {
             "preference_tags": ["leather"],
             "summary": "Prior purchases emphasize leather.",
