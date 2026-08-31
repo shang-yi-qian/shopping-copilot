@@ -239,3 +239,1510 @@ question. One coherent object instead of a pile of heuristics.
 
 Finals Q&A tests whether we understand our own system. Every non-obvious
 constant should have a recorded reason in `NOTES.md`.
+
+---
+
+## 9. Three-hour concurrent sprint plan (current execution mode)
+
+This section is the operating plan when only two people and three hours are
+available. It **supersedes the time estimates and build sequence in Sections 3–7**
+for this sprint. The earlier sections remain useful as rationale and future work,
+but attempting the embedding, entropy, and LLM phases now would prevent a complete
+submission.
+
+The fast path is designed to finish in **2 hours 40 minutes**, leaving a
+20-minute emergency buffer. The goal is not maximum feature count. The goal is a
+measured, reproducible agent plus every required submission artifact.
+
+### 9.1 Decisions already made
+
+Do not reopen these decisions during the sprint unless an official rule directly
+contradicts them:
+
+1. **One production-code owner.** Only Person A edits `starter/agent.py`.
+2. **One delivery owner.** Person B owns tests, measurement, README, Devpost, and
+   video assets. This is the only conflict-free split while production code is
+   intentionally kept in one file.
+3. **No external LLM or embedding API.** The environment currently has no NumPy,
+   scikit-learn, PyTorch, or SentenceTransformers. Installing a stack, generating
+   50,000 embeddings, adding a cache, and validating failure behavior is outside
+   the critical path.
+4. **No upstream Amazon data download.** The official frozen catalog contains
+   every field used to derive the simulator's intent cards.
+5. **No UI.** A headless evaluator and traced conversations satisfy the track's
+   demo requirement.
+6. **No public-label tuning or hardcoded ASINs.** All derived signatures must be
+   computed from the frozen catalog and published simulator rules.
+7. **No unmeasured feature enters the frozen commit.** The best measured commit
+   wins, even if a later commit looks more sophisticated.
+8. **Documentation starts immediately.** Person B does not wait for final metrics
+   before writing everything else.
+
+The default role assignment is:
+
+- **Person A — Agent and integration lead:** owns agent behavior, scoring runs,
+  merges, release commit, and Git tag.
+- **Person B — Evaluation and delivery lead:** owns tests, evidence, README,
+  Devpost, video, and the submission checklist.
+
+The pair may swap the roles once before starting. Do not swap halfway through.
+
+### 9.2 Verified evaluator behavior
+
+These are answers to the four recon questions in Section 3 and should be copied
+to `NOTES.md`. There is no need to spend sprint time rediscovering them.
+
+#### Q1 — What a clarification returns
+
+The simulator uses the structured `ask_attribute`; it does not infer the
+attribute from the natural-language question.
+
+- A specific attribute such as `color` returns an undisclosed target constraint
+  only when that constraint is classified as `color`.
+- If no undisclosed target constraint has that classification, the simulator
+  returns that it has no additional preference.
+- `ask_attribute="other"` matches any undisclosed constraint and returns up to
+  two of them.
+- On a Boundary session, the first non-null question deliberately receives one
+  "no preference" response. Later questions work normally.
+
+**Sprint consequence:** use a natural multi-facet question with
+`ask_attribute="other"`. Entropy optimization over individual attributes is
+inferior to the published `other` behavior for this evaluator and costs time to
+implement.
+
+#### Q2 — Turn increments
+
+Every call to `respond()` consumes a turn, regardless of whether the agent asks
+a question. Asking is therefore not free. However, the response may include both
+ten recommendations and a clarification question.
+
+**Sprint consequence:** always recommend on every turn, including clarification
+turns.
+
+#### Q3 — Repeated ASINs
+
+The evaluator removes invalid and duplicate ASINs within the current response.
+It does not impose a separate cross-turn penalty or cross-turn deduplication.
+
+If an ASIN was shown earlier and the session continued, that ASIN was not the
+target. It is therefore safe and beneficial to exclude it on later turns.
+
+**Sprint consequence:** maintain a per-session `seen_asins` set and fill each
+turn with unseen candidates.
+
+#### Q4 — MRR
+
+MRR is calculated from the target's rank within the successful turn's list. It
+is not a global rank across all turns. A late hit is penalized through MTTC.
+
+**Sprint consequence:** order the strongest candidate first on every turn, but
+use the remaining slots to cover unseen candidates.
+
+Additional evaluator facts that drive the sprint design:
+
+- The final evaluator uses the same deterministic customer templates and
+  `ask_attribute` response policy as the public evaluator.
+- Intent cards are derived from the same frozen catalog metadata available to
+  the Agent.
+- A Buying opening exposes the target's coarse category and first hard
+  constraint.
+- A Browsing opening exposes only the coarse category.
+- An Intent Override opening includes an old soft preference; the new hard
+  preference is revealed on turn 3 or 4, and a hit cannot count before then.
+- The official evaluator processes sessions sequentially, so shared immutable
+  indexes are safe while conversation state must remain isolated.
+
+### 9.3 Sprint architecture
+
+The sprint implementation is a two-route, contract-aware agent written entirely
+inside `starter/agent.py` with Python's standard library.
+
+#### Route A — Catalog-signature precision route
+
+At startup, reproduce the published catalog-derived intent signature for every
+product:
+
+1. Build searchable text from `title`, `features`, `details`, `description`,
+   `categories`, and `store`.
+2. Derive the coarse category using the same category cleanup rules as the
+   evaluator.
+3. Build the ordered candidate constraints from features followed by details.
+4. Insert the first recognized material and color at the front, matching the
+   published intent-card construction.
+5. Append price as `budget around $...` when price exists.
+6. Retain the first two values as hard constraints and the next two as soft
+   constraints.
+
+Precompute:
+
+- `product_rows`: ASIN, coarse category, ordered constraint list, rating, rating
+  count, and searchable fields.
+- `by_category`: normalized coarse category to product indices.
+- `by_constraint`: normalized exact constraint to product indices.
+
+This route is strongest when customer messages contain exact catalog-derived
+constraints. It is legitimate catalog preprocessing and must not access
+`ground_truth` or `public_set.jsonl`.
+
+#### Route B — Accumulated-context BM25 fallback
+
+Retain the starter SQLite FTS5 index. Instead of searching only the latest
+message, build a query from the active session category and active constraints.
+Use this route when:
+
+- no exact constraint index entry exists;
+- exact constraint intersections become empty;
+- multiple products have indistinguishable intent signatures; or
+- an unexpected message template appears.
+
+Do not hard-filter on price, description, or sparsely populated detail fields.
+Use exact catalog signatures for precision and BM25 for recall.
+
+#### Session state
+
+Each `reset()` creates a state dictionary with at least:
+
+```python
+{
+    "profile": user_profile,
+    "mode": None,
+    "category": None,
+    "constraints": [],
+    "old_preference": None,
+    "seen_asins": set(),
+    "asked_attributes": [],
+    "last_candidate_count": 0,
+}
+```
+
+Rules:
+
+- Accumulate new constraints by default.
+- Deduplicate normalized constraints while preserving order.
+- Treat "I don't have a preference" as no new evidence; do not exclude products.
+- On override, remove only `old_preference`, add the new requirement, and retain
+  independently disclosed hard constraints.
+- Never share mutable state between session IDs.
+- Validate that `reset()` was called before `respond()`.
+
+#### Message parsing
+
+Support the published templates first, with a safe generic fallback:
+
+- `I'm looking for <category>. A key requirement is: <value>.` → Buying.
+- `I'm looking for <category>, but I'm still exploring.` → Browsing.
+- `I'm looking for <category>. <old preference>` → probable Intent Override.
+- `For that, what matters is: <value>; <value>.` → append constraints.
+- `Actually, ignore my earlier preference. What I need is: <value>.` → override.
+- `I don't have a preference for <attribute>; ...` → Boundary/no evidence.
+
+Normalize whitespace and trailing punctuation before lookup. Preserve the raw
+text only for BM25 fallback.
+
+#### Ranking without fragile tuned weights
+
+Prefer a lexicographic ranking tuple over a large collection of tuned constants:
+
+1. Number of observed values matching the correct signature position.
+2. Number of observed values matching anywhere in the product signature.
+3. Exact coarse-category match.
+4. BM25 reciprocal rank or BM25 score.
+5. `rating_number` as a final popularity tie-breaker.
+6. Stable ASIN ordering for deterministic output.
+
+When an exact constraint index produces a non-empty intersection, use it to
+narrow the candidate set. If an intersection would become empty, keep the prior
+candidate set and treat the constraint as a soft ranking signal instead. This
+prevents a missing or ambiguous field from deleting the target.
+
+After ranking:
+
+1. Remove ASINs already in `seen_asins`.
+2. Take up to `top_k` candidates.
+3. If fewer than `top_k` remain, fill from unseen BM25/category/global fallback
+   candidates.
+4. Add returned ASINs to `seen_asins`.
+5. Return valid unique ASIN dictionaries in exact rank order.
+
+#### Clarification policy
+
+Until the candidate set is confidently small or the turn limit is near, return:
+
+```python
+"message": (
+    "What other requirement matters most—material, color, fit, style, "
+    "budget, or intended use?"
+),
+"ask_attribute": "other",
+```
+
+Recommendations must still be present. If no useful question remains, set
+`ask_attribute` to `None` and provide a concise customer-facing message.
+
+#### Failure fallback
+
+Wrap parsing and retrieval so an unexpected value cannot produce an empty or
+invalid response. On internal failure:
+
+- fall back to latest-message BM25;
+- return up to ten valid unseen ASINs;
+- return a string message;
+- use `ask_attribute="other"` when another turn is available; and
+- report zero token usage because the sprint path uses no LLM.
+
+### 9.4 File and branch ownership
+
+The statement "edit exactly one file" means **one production Agent file**.
+Supporting tests and submission documents may be created without changing the
+official evaluator.
+
+| Owner | Branch | Exclusive files |
+|---|---|---|
+| Person A | `feat/agent` | `starter/agent.py` |
+| Person B | `feat/delivery` | `tests/test_agent.py`, `README.md`, `NOTES.md`, `ABLATION.md`, `DEVPOST.md`, `DEMO_SCRIPT.md`, `requirements.txt` |
+
+Rules:
+
+- Person A never edits delivery files before integration.
+- Person B never edits `starter/agent.py`.
+- Neither person edits `evaluator/`, `data/public_set.jsonl`, or the catalog.
+- Communicate facts and metrics through chat, not by temporarily editing the
+  other owner's files.
+- Push small named checkpoint commits; do not pass uncommitted patches between
+  machines.
+- Person A is the only person who merges to `main` during the sprint.
+
+Separate machines:
+
+```bash
+# Person A
+git switch main
+git pull --ff-only
+git switch -c feat/agent
+
+# Person B, in a separate clone
+git switch main
+git pull --ff-only
+git switch -c feat/delivery
+```
+
+One machine with two working directories:
+
+```bash
+git branch feat/delivery
+git switch -c feat/agent
+git worktree add ../shopping-copilot-delivery feat/delivery
+```
+
+### 9.5 Exact three-hour timeline
+
+Use a timer. Each gate is a hard stop. When a gate arrives, choose the best
+working commit rather than extending the phase.
+
+#### 00:00–00:10 — Shared kickoff
+
+Person A:
+
+```bash
+test -f data/catalog.jsonl || gzip -dc catalog.jsonl.gz > data/catalog.jsonl
+python3 -m unittest discover -v
+git switch -c feat/agent
+```
+
+The catalog is ignored by Git and remains read-only.
+
+Person B:
+
+```bash
+git switch -c feat/delivery
+```
+
+Then immediately create:
+
+- `NOTES.md` containing the verified evaluator answers in Section 9.2;
+- `ABLATION.md` with the official baseline row;
+- README headings from Section 9.9;
+- `DEVPOST.md` headings from Section 9.10; and
+- `DEMO_SCRIPT.md` containing the timeline from Section 9.11.
+
+Shared gate at minute 10:
+
+- both branches exist;
+- both people can load the repository;
+- the catalog exists locally;
+- `.env` and `data/catalog.jsonl` are ignored; and
+- no one is waiting for the other to begin.
+
+#### 00:10–00:55 — Parallel build A
+
+Person A implements the complete minimum Agent in this order:
+
+1. Normalization and catalog-signature helpers.
+2. Shared immutable catalog and reverse indexes.
+3. Session initialization.
+4. Published-template parsing.
+5. Ordered signature ranking.
+6. BM25 fallback.
+7. Cross-turn deduplication.
+8. Clarification plus recommendations in the same response.
+9. Output validation and failure fallback.
+
+Do not optimize or refactor before the first full run works.
+
+Person B works concurrently:
+
+1. Add small contract/state tests using a temporary miniature catalog.
+2. Verify response fields, valid attributes, unique recommendations, and session
+   isolation.
+3. Add an override test proving that the old preference is removed while other
+   constraints remain.
+4. Write README and Devpost text that does not depend on final metrics.
+5. Prepare a baseline-versus-final table with final cells left blank.
+6. Prepare the video narration and terminal commands.
+
+At minute 45, Person A stops feature work long enough to run a smoke evaluation.
+At minute 55, Person A must push a runnable checkpoint:
+
+```bash
+git add starter/agent.py
+git commit -m "Implement stateful catalog-signature agent"
+git push -u origin feat/agent
+```
+
+This checkpoint is **RC1**. Person B can now evaluate RC1 while Person A continues
+on RC2. A stable checkpoint prevents evaluation from blocking ongoing tuning.
+
+#### 00:55–01:20 — Parallel build B
+
+Person B fetches RC1 and runs:
+
+```bash
+git fetch origin feat/agent
+SHOPPING_CATALOG="$(pwd)/data/catalog.jsonl"
+git worktree add --detach ../shopping-copilot-rc1 origin/feat/agent
+cd ../shopping-copilot-rc1
+python3 -m unittest discover -v
+python3 -m evaluator.local_evaluator \
+  --catalog "$SHOPPING_CATALOG" \
+  --output /tmp/shopping-copilot-rc1-results.json
+```
+
+This detached worktree evaluates the exact pushed commit without overwriting
+delivery-branch work. Return to the delivery worktree after the run. Record:
+
+- overall Hit Rate, MRR, MTTC, Efficiency, and TechnicalScore;
+- all four scenario tables;
+- runtime;
+- exceptions or empty outputs; and
+- the RC1 commit hash.
+
+Person A uses the same interval to fix only high-value problems:
+
+- parser failure;
+- empty candidate lists;
+- incorrect override erasure;
+- duplicate recommendations;
+- target tied below rank 10 because positional signature information was lost;
+  or
+- the weakest scenario from RC1.
+
+Do not start dense retrieval, an LLM, or entropy selection.
+
+Score gates at minute 80:
+
+- **Floor:** TechnicalScore ≥ 0.75.
+- **Target:** TechnicalScore ≥ 0.85.
+- **Coverage target:** Hit Rate@10 ≥ 0.97.
+- **Efficiency target:** MTTC ≤ 2.5.
+
+If RC1 clears the target, stop architectural changes. Only correctness fixes are
+allowed. If it clears the floor but not the target, use one measured tuning pass.
+If it misses the floor, simplify to exact ordered signature matching plus
+`ask_attribute="other"`; do not add components.
+
+#### 01:20–01:35 — Select the release candidate
+
+Person A pushes RC2 if and only if it is runnable:
+
+```bash
+git add starter/agent.py
+git commit -m "Improve ranking and scenario handling"
+git push origin feat/agent
+```
+
+Person B compares RC1 and RC2 using the official evaluator. Choose the candidate
+with the higher measured TechnicalScore, subject to:
+
+- no scenario-regression catastrophe;
+- no exceptions;
+- deterministic repeated runs; and
+- all contract tests passing.
+
+An unmeasured RC2 automatically loses to a measured RC1.
+
+#### 01:35–01:50 — Integrate conflict-free branches
+
+Person B commits and pushes delivery work:
+
+```bash
+git add README.md NOTES.md ABLATION.md DEVPOST.md DEMO_SCRIPT.md requirements.txt tests/test_agent.py
+git commit -m "Add evaluation evidence and submission documentation"
+git push -u origin feat/delivery
+```
+
+Person A integrates:
+
+```bash
+git fetch origin
+git switch main
+git pull --ff-only
+git merge --no-ff origin/feat/agent
+git merge --no-ff origin/feat/delivery
+```
+
+Because file ownership is disjoint, these merges should be automatic. If a
+conflict appears, preserve the selected Agent commit and the newest delivery
+document; do not manually combine competing Agent implementations.
+
+Run on integrated `main`:
+
+```bash
+python3 -m unittest discover -v
+python3 -m evaluator.local_evaluator
+```
+
+Person B copies the integrated metrics into `ABLATION.md`, README, and Devpost.
+
+#### 01:50–02:00 — Hard code freeze
+
+No new features after minute 110.
+
+Audit:
+
+```bash
+git status --short
+git diff 1d9b9c2 -- evaluator data/public_set.jsonl
+git ls-files .env data/catalog.jsonl results.json
+```
+
+Expected:
+
+- clean working tree after final documentation commit;
+- no evaluator or public-label changes;
+- `.env`, decompressed catalog, and `results.json` are not tracked;
+- no public target ASINs are embedded in Agent code; and
+- the documented command reproduces the score.
+
+Check history for likely API-key patterns without printing matched secret values:
+
+```bash
+if git log -p --all | grep -qiE 'sk-[A-Za-z0-9_-]{12,}'; then
+  echo "Possible API key found in Git history" >&2
+  exit 1
+fi
+```
+
+Freeze:
+
+```bash
+git add README.md NOTES.md ABLATION.md DEVPOST.md DEMO_SCRIPT.md requirements.txt tests/test_agent.py
+git commit -m "Prepare TechJam Shopping Copilot submission" || true
+git tag submission-v1
+git push origin main --tags
+```
+
+Record the exact frozen commit hash:
+
+```bash
+git rev-parse HEAD
+```
+
+#### 02:00–02:40 — Parallel delivery
+
+Person A:
+
+1. Verify the GitHub repository is public in a signed-out browser.
+2. Check that the README renders correctly.
+3. Run the README setup/evaluation commands from a clean clone or clean
+   temporary directory when feasible.
+4. Capture terminal output for one Browsing session, one Intent Override
+   session, and aggregate metrics.
+5. Send Person B the frozen commit hash, exact metric table, runtime, Python
+   version, and hardware description.
+6. Fix only broken links, incorrect commands, or release-blocking documentation.
+   Do not modify Agent behavior after the tag.
+
+Person B:
+
+1. Record the three-minute video using the frozen build.
+2. Use one clean screen capture; avoid animation and time-consuming editing.
+3. Upload it to YouTube as Public.
+4. Fill Devpost from `DEVPOST.md`.
+5. Add the public repository and video links.
+6. Fill individual team contributions explicitly.
+7. Save the Devpost draft early rather than waiting for the upload to finish.
+
+#### 02:40–02:55 — Joint submission audit
+
+Both people independently open and verify:
+
+- public repository without authentication;
+- public YouTube video;
+- Devpost repository link;
+- Devpost video link;
+- written project description;
+- technology, API, library, and dataset disclosure;
+- README setup and reproduction command;
+- final metrics and baseline comparison;
+- limitations and future improvements;
+- team contributions; and
+- the frozen commit hash.
+
+Submit no later than minute 175. Capture the confirmation screen and URL.
+
+#### 02:55–03:00 — Reserved buffer
+
+Use only for upload, authentication, or Devpost failures. Do not reopen code.
+
+### 9.6 Person A implementation checklist
+
+Person A should check these off in order:
+
+- [ ] `Agent` initializes once and indexes exactly 50,000 catalog products.
+- [ ] Index construction does not mutate catalog objects or write catalog data.
+- [ ] Catalog signature logic is independent of public labels.
+- [ ] `reset()` stores an isolated state for every session ID.
+- [ ] Buying opening is parsed.
+- [ ] Browsing opening is parsed.
+- [ ] Clarification constraints are appended in order.
+- [ ] Intent Override removes only the stale preference.
+- [ ] Boundary/no-preference message does not eliminate candidates.
+- [ ] Exact signature route works when constraints match.
+- [ ] BM25 route works when signatures do not match.
+- [ ] Previous ASINs are not recommended again.
+- [ ] Every turn returns up to ten recommendations.
+- [ ] Clarification turns also contain recommendations.
+- [ ] `message` is always a string.
+- [ ] `ask_attribute` is allowed or `None`.
+- [ ] `recommendations` are valid, unique, and ordered.
+- [ ] `usage` contains non-negative integers.
+- [ ] Exceptions fall back to valid BM25 output.
+- [ ] Two full evaluator runs are deterministic.
+
+### 9.7 Person B evaluation checklist
+
+Person B owns evidence, not just prose:
+
+- [ ] Record baseline commit and baseline metrics.
+- [ ] Record RC1 commit and metrics.
+- [ ] Record RC2 only if it receives a complete evaluator run.
+- [ ] Record per-scenario metrics for the selected release.
+- [ ] Record accepted and rejected changes in `ABLATION.md`.
+- [ ] Add contract tests without changing the official evaluator.
+- [ ] Test session isolation with two interleaved session IDs.
+- [ ] Test cross-turn recommendation deduplication.
+- [ ] Test Intent Override erasure.
+- [ ] Test Boundary/no-preference handling.
+- [ ] Measure evaluator wall-clock runtime.
+- [ ] Record Python version and hardware.
+- [ ] Report model cost and token use as zero for the offline path.
+- [ ] Confirm all documented metrics come from the unmodified evaluator.
+
+### 9.8 Release gates and fallback ladder
+
+Use this ladder rather than improvising under time pressure.
+
+#### Gate A — Agent fails to initialize
+
+1. Remove optional preprocessing.
+2. Verify the catalog path.
+3. Restore the original SQLite FTS build.
+4. Run a single-session smoke test before the full evaluator.
+
+#### Gate B — Score below 0.75
+
+1. Verify that the ordered intent signature matches evaluator construction.
+2. Verify that `ask_attribute="other"` is being sent every ambiguous turn.
+3. Verify that all returned constraints are accumulated.
+4. Verify that seen ASINs are excluded.
+5. Verify that positional matches outrank popularity.
+6. Remove any hard filter that empties the candidate pool.
+
+Do not respond by adding an embedding model.
+
+#### Gate C — Buying strong, Browsing weak
+
+1. Ensure the first clarification is asked on turn 1.
+2. Ensure turn 1 still returns recommendations.
+3. On turn 2, use both revealed constraints in order.
+4. Use BM25/category diversity for unresolved ties.
+
+#### Gate D — Override weak
+
+1. Do not clear category or independently disclosed hard constraints.
+2. Remove only the initial old soft preference.
+3. Preserve constraints learned before the override turn.
+4. Place the newly revealed hard constraint at high priority.
+
+#### Gate E — Boundary weak
+
+1. Treat the first no-preference reply as neutral evidence.
+2. Ask `other` again on the next turn.
+3. Continue returning unseen candidates on both turns.
+
+#### Gate F — Video or upload behind schedule
+
+1. Stop editing code and documentation.
+2. Record one uninterrupted terminal walkthrough.
+3. Export/upload at 720p if necessary.
+4. Use the prepared script without voice retakes unless audio is unintelligible.
+5. Save and submit the Devpost draft before polishing optional fields.
+
+#### Gate G — Integration regression
+
+1. Identify whether RC1 or RC2 was the last fully measured commit.
+2. Revert the Agent file to that exact commit.
+3. Keep delivery documents and correct their metrics.
+4. Re-run tests once, tag, and freeze.
+
+### 9.9 Required README structure
+
+Person B should replace the organizer-generic README with this structure while
+preserving attribution and official setup facts:
+
+1. **Project name and tagline**
+   - One sentence explaining the customer outcome.
+2. **Problem**
+   - Keyword search fails when intent is vague or changes mid-session.
+3. **Key insight**
+   - Shopping is sequential experiment design under a turn budget.
+4. **Architecture**
+   - Catalog-signature precision route.
+   - Accumulated-context BM25 fallback.
+   - Session state and selective override erasure.
+   - Clarification plus recommendation policy.
+5. **Why this generalizes**
+   - No public target hardcoding.
+   - All preprocessing comes from the frozen catalog.
+   - Few fixed components and deterministic behavior.
+6. **Repository layout**
+7. **Requirements**
+   - Exact/recommended Python version.
+   - Standard-library-only dependency disclosure if retained.
+8. **Setup**
+   - Clone.
+   - Verify checksum.
+   - Decompress catalog.
+9. **Run**
+   - One official evaluator command.
+10. **Results**
+    - Baseline and final overall metrics.
+    - Per-scenario table.
+    - Runtime, tokens, and cost.
+11. **Ablations**
+    - Link to `ABLATION.md`.
+12. **Example conversation**
+    - At least one complete multi-turn trace.
+13. **Limitations**
+14. **Future work**
+15. **Data attribution**
+16. **Team contributions**
+17. **Reproduction/frozen commit**
+
+Do not claim private-set performance. Label every metric as a public development
+result.
+
+### 9.10 Devpost description template
+
+`DEVPOST.md` should contain copy-ready text under these headings:
+
+#### Inspiration
+
+Explain the gap between keyword matching and evolving customer intent.
+
+#### What it does
+
+Describe how the agent jointly chooses ten products and one clarification each
+turn, handles Buying/Browsing/Override/Boundary behavior, and stops within the
+ten-turn limit.
+
+#### How we built it
+
+Name:
+
+- Python and SQLite FTS5;
+- catalog-derived intent signatures;
+- in-memory reverse indexes;
+- session-state tracking;
+- official Amazon Reviews 2023-derived frozen catalog; and
+- the unmodified organizer evaluator.
+
+Explicitly state that the release path uses no external LLM/API if that remains
+true.
+
+#### Challenges
+
+Mention sparse metadata, indistinguishable generic products, intent replacement,
+and optimizing both rank and number of turns.
+
+#### Accomplishments
+
+Report the measured baseline improvement, scenario balance, deterministic
+runtime, and zero model cost.
+
+#### What we learned
+
+Explain why information acquisition and retrieval cannot be optimized
+independently in a conversational system.
+
+#### What's next
+
+List dense semantic retrieval, learned posterior calibration, natural-language
+robustness beyond templates, and richer real-world preference memory.
+
+#### Built with
+
+List only tools actually used. Do not list an API, library, or model that is not
+present in the frozen build.
+
+#### Team contributions
+
+Use explicit individual bullets, matching the actual split in Section 9.4.
+
+### 9.11 Three-minute demo script
+
+Keep the uploaded video at or below three minutes.
+
+| Time | Visual | Narration goal |
+|---|---|---|
+| 0:00–0:20 | Title plus baseline score | Define the search problem and ten-turn constraint. |
+| 0:20–0:45 | One architecture diagram or README diagram | Explain precision route, BM25 fallback, state, and question policy. |
+| 0:45–1:25 | Complete Browsing trace | Show vague opening, broad clarification, revealed constraints, and narrowing. |
+| 1:25–2:00 | Complete Intent Override trace | Show stale preference removal without losing valid constraints. |
+| 2:00–2:30 | Evaluator metric table | Compare official baseline and frozen public result, including scenario balance. |
+| 2:30–2:48 | Cost/latency/reproducibility | State in-memory execution, model cost, token use, and evaluator command. |
+| 2:48–3:00 | Public repository and team | Show README/repository and close with the value proposition. |
+
+One person narrates. The other operates the terminal. Do not alternate speakers
+unless rehearsed; handoffs consume time and create audio inconsistencies.
+
+### 9.12 Final definition of done
+
+The sprint is complete only when every item below is true:
+
+- [ ] `starter/agent.py` exports the required `Agent` interface.
+- [ ] Official unit tests pass.
+- [ ] Added Agent tests pass.
+- [ ] Official evaluator completes without exceptions.
+- [ ] Final metrics are recorded from the unmodified evaluator.
+- [ ] No public labels or target ASINs are used by the Agent.
+- [ ] Catalog remains read-only.
+- [ ] `.env` is ignored and no API key appears in tracked history.
+- [ ] Repository is public and accessible while signed out.
+- [ ] README contains setup, reproduction, results, limitations, future work,
+      attribution, and team contributions.
+- [ ] Devpost contains approach, tools, APIs, libraries, datasets, and links.
+- [ ] Video is public on YouTube and no longer than three minutes.
+- [ ] Devpost links open correctly.
+- [ ] Frozen commit hash and tag are recorded.
+- [ ] Submission confirmation is captured.
+
+### 9.13 After the submission deadline
+
+The 800 final sessions are released only after the Devpost deadline. When they
+arrive:
+
+1. Check out the frozen submission tag in a clean directory.
+2. Do not modify Agent code, prompts, indexes, model configuration, or evaluator.
+3. Place the released final data where documented by the organizer.
+4. Run the unmodified official evaluator.
+5. Retain `results.json`, the frozen commit hash, Python version, hardware,
+   runtime, and any relevant logs.
+6. Do not retrospectively update the submitted implementation based on private
+   results.
+
+This post-deadline run is evidence for the organizer, not another development
+round.
+
+---
+
+## 10. Detailed final-product specification
+
+This section defines exactly what the pair is expected to deliver at the end of
+the sprint. It is a reference contract, not an additional feature backlog. If a
+detail here conflicts with the time gates in Section 9.5, preserve correctness,
+reproducibility, and submission completeness before optional polish.
+
+### 10.1 Product identity and promise
+
+Working product name:
+
+> **IntentCart — a stateful shopping copilot that treats each conversation turn
+> as a retrieval-and-information decision.**
+
+One-sentence product promise:
+
+> IntentCart converts vague, evolving shopping requests into ranked product
+> recommendations by combining catalog-derived intent signatures, lexical
+> retrieval, selective memory, and proactive clarification—all in memory and
+> without external model cost.
+
+The final product is not a website. It is a Python Agent that:
+
+1. Loads the frozen 50,000-product catalog once.
+2. Receives a safe user profile at session reset.
+3. Receives one customer message per turn.
+4. Updates an isolated session state.
+5. Returns a natural message, one allowed `ask_attribute` or `None`, up to ten
+   ranked catalog ASINs, and usage information.
+6. Finds the hidden target as early and as highly ranked as possible.
+7. Produces deterministic results for identical catalog, session, and messages.
+
+The product succeeds only when the **code, evidence, documentation, video, and
+submission** all describe the same frozen implementation.
+
+### 10.2 Public interface contract
+
+The final `starter/agent.py` must continue to export:
+
+```python
+class Agent:
+    def __init__(self, catalog_path: str | Path = "data/catalog.jsonl") -> None:
+        ...
+
+    def reset(self, session_id: str, user_profile: dict) -> None:
+        ...
+
+    def respond(
+        self,
+        session_id: str,
+        user_message: str,
+        turn: int,
+        top_k: int,
+    ) -> dict:
+        ...
+```
+
+Required response shape:
+
+```python
+{
+    "message": str,
+    "ask_attribute": (
+        "category" | "material" | "color" | "size" | "style" |
+        "brand" | "budget" | "feature" | "use_case" | "other" | None
+    ),
+    "recommendations": [
+        {"parent_asin": str},
+        # at most top_k entries, ranked best to worst
+    ],
+    "usage": {
+        "prompt_tokens": int,      # 0 for the offline sprint build
+        "completion_tokens": int,  # 0 for the offline sprint build
+    },
+}
+```
+
+Interface invariants:
+
+- `session_id` must already have been passed to `reset()`.
+- `turn` is between 1 and 10.
+- `top_k` is expected to be 10, but code should respect the provided positive
+  value up to the evaluator limit.
+- `message` is never `None`.
+- `recommendations` is always a list, even on failure.
+- Every returned ASIN exists in the loaded catalog.
+- No ASIN occurs twice in one response.
+- Recommendation order is the actual rank order; the optional numeric `score`
+  field is unnecessary because the evaluator ignores it.
+- Usage integers are non-negative and honest.
+
+### 10.3 Internal data model
+
+The implementation may use dictionaries or small tuples rather than dataclasses
+to stay inside one file, but the conceptual types and invariants should match the
+following definitions.
+
+#### ProductRecord
+
+```text
+ProductRecord
+  asin: str                         unique catalog parent_asin
+  title: str
+  coarse_category: str             normalized last useful category levels
+  ordered_constraints: tuple[str]  hard constraints followed by soft constraints
+  searchable_text: str             flattened catalog fields
+  rating: float
+  rating_number: int
+```
+
+Invariants:
+
+- One record per catalog ASIN.
+- Normalized strings are stable and lowercase/case-folded.
+- Missing values become empty strings or empty tuples, never the string `None`.
+- Product records are immutable after Agent initialization.
+
+#### SessionState
+
+```text
+SessionState
+  profile: dict
+  mode: buying | browsing | override | boundary | unknown
+  category: str | None
+  constraints: list[str]
+  old_preference: str | None
+  seen_asins: set[str]
+  asked_attributes: list[str]
+  last_candidate_count: int
+  last_message: str
+```
+
+Invariants:
+
+- Exactly one state object per active session ID.
+- Constraints are normalized, unique, and ordered by disclosure time.
+- `old_preference` is removed on override but other constraints remain.
+- `seen_asins` contains exactly the valid ASINs previously returned for that
+  session.
+- No mutable collection is shared across sessions.
+
+#### ParsedTurn
+
+```text
+ParsedTurn
+  detected_mode: str | None
+  category: str | None
+  additions: list[str]
+  replacement: str | None
+  is_no_preference: bool
+```
+
+The parser converts a raw customer message into state operations. Parsing should
+not retrieve or rank products directly.
+
+#### RankedCandidate
+
+```text
+RankedCandidate
+  product_index: int
+  positional_matches: int
+  exact_matches: int
+  category_match: int
+  bm25_rank: int | sentinel
+  rating_number: int
+```
+
+The final implementation does not need to instantiate this type; it may build a
+sorting tuple directly.
+
+### 10.4 Recommended function layout inside `starter/agent.py`
+
+Keep functions short enough that Person B can review behavior against this
+contract. Recommended layout:
+
+```text
+Imports and constants
+  TOKEN_RE, STOPWORDS, MATERIAL_RE, COLOR_RE, allowed attributes
+
+Pure normalization helpers
+  _text(value)
+  _normalize(value)
+  _terms(text)
+  _flatten_values(value)
+  _clean_constraint(value, limit)
+
+Catalog-derived signature helpers
+  _searchable_text(product)
+  _coarse_category(categories)
+  _intent_signature(product)
+
+Message parser
+  _parse_turn(user_message)
+
+Agent
+  __init__
+  _build_indexes
+  reset
+  _update_state
+  _signature_candidates
+  _bm25_candidates
+  _rank_candidates
+  _fill_unseen
+  _question
+  respond
+```
+
+Responsibilities:
+
+- `_text`: flatten scalar/list/dict catalog values without losing keys.
+- `_normalize`: collapse whitespace, case-fold, and strip template punctuation.
+- `_terms`: tokenize safe lexical query terms and remove stopwords.
+- `_intent_signature`: derive no more than the published hard/soft constraint
+  count; never inspect session labels.
+- `_parse_turn`: recognize known templates, then return a neutral unknown result
+  for unfamiliar text.
+- `_update_state`: apply parsed operations in one place so override behavior is
+  testable.
+- `_signature_candidates`: perform exact reverse-index lookup without throwing
+  away the current pool when a lookup misses.
+- `_bm25_candidates`: return a sufficiently large ranked fallback list, such as
+  100–250 candidates, rather than only the final ten.
+- `_rank_candidates`: create deterministic tuples and sort once.
+- `_fill_unseen`: enforce validity, response uniqueness, cross-turn coverage,
+  and `top_k`.
+- `_question`: decide only message/attribute; it must not mutate retrieval state.
+- `respond`: orchestrate the helpers and build the public response.
+
+### 10.5 Initialization lifecycle
+
+`Agent.__init__` should execute this sequence once:
+
+1. Resolve and validate the catalog path.
+2. Create the in-memory SQLite connection and FTS table.
+3. Initialize product arrays and reverse-index dictionaries.
+4. Stream the catalog line by line; do not load raw JSON lines into a second
+   unnecessary copy.
+5. For each product:
+   - validate/convert the ASIN;
+   - flatten searchable fields;
+   - derive coarse category;
+   - derive the ordered signature;
+   - append the compact product record;
+   - update category and constraint reverse indexes; and
+   - add one FTS row to the current batch.
+6. Commit the SQLite batch inserts.
+7. Store the catalog ASIN set for output validation.
+8. Initialize the empty session dictionary.
+9. Optionally record initialization duration for README evidence without printing
+   per-product logs.
+
+Initialization acceptance criteria:
+
+- Exactly 50,000 unique ASINs are indexed.
+- A missing or malformed optional field does not abort startup.
+- A missing catalog file raises a clear actionable error.
+- No network connection occurs.
+- No derived artifact is written into the repository.
+
+### 10.6 State-transition contract
+
+| Current state | Incoming message | Required state operation | Next state |
+|---|---|---|---|
+| New | Buying opening | Set category; add first hard constraint | Buying |
+| New | Browsing opening | Set category; no constraint yet | Browsing |
+| New | Category plus old preference | Set category and `old_preference`; add it provisionally | Override candidate |
+| Any | Constraint reply | Append each new normalized value in message order | Same mode |
+| Override candidate | Explicit override | Remove old preference only; add replacement | Override |
+| Any | No-preference reply | Add no constraint; keep pool; mark boundary when appropriate | Boundary/current |
+| Any | Unknown message | Preserve existing state; make raw text available to BM25 | Current/unknown |
+
+Additional rules:
+
+- A repeated constraint is ignored rather than appended twice.
+- A category change clears category-dependent soft preferences only if the message
+  explicitly indicates replacement. Do not erase state based on a weak lexical
+  guess.
+- An override replacement already present in constraints remains once.
+- A no-preference response is not negative evidence against products that contain
+  the named attribute.
+- State updates occur before retrieval on each turn.
+
+### 10.7 Candidate generation contract
+
+Candidate generation is a union of precision and recall routes.
+
+#### Precision pool
+
+1. Begin with the exact category bucket when present; otherwise begin with all
+   products.
+2. For each active constraint, retrieve its exact reverse-index set.
+3. Intersect only when the result remains non-empty.
+4. Keep the previous pool when the reverse lookup is missing or the intersection
+   empties the pool.
+5. Retain the constraint as a later soft scoring feature even when it cannot
+   safely narrow.
+
+#### BM25 pool
+
+Build a lexical query from:
+
+```text
+active category + active constraints + latest non-template message terms
+```
+
+Use quoted sanitized tokens joined with `OR`, as in the starter. Retrieve more
+than ten candidates so fusion can recover products outside the exact pool.
+
+#### Combined pool
+
+Use the union of:
+
+- narrowed precision candidates;
+- top BM25 candidates; and
+- category candidates when the other routes return too few.
+
+If the union is still empty, fall back to deterministic global catalog order or
+rating-count order. An empty response should be practically impossible.
+
+### 10.8 Exact ranking contract
+
+For every candidate, calculate:
+
+```text
+positional_matches = count of constraints whose observed order matches the
+                     corresponding product-signature position
+
+exact_matches      = count of active constraints appearing anywhere in the
+                     product signature
+
+category_match     = 1 when coarse category matches, else 0
+
+bm25_rank          = zero-based rank from the BM25 pool, or a large sentinel
+
+popularity         = rating_number, used only after relevance signals
+```
+
+Recommended ascending Python sort key:
+
+```python
+(
+    -positional_matches,
+    -exact_matches,
+    -category_match,
+    bm25_rank,
+    -rating_number,
+    parent_asin,
+)
+```
+
+Do not multiply relevance by popularity. A highly popular but irrelevant item
+must not outrank an exact signature match. This tie-break approach also avoids
+inventing an RRF constant that cannot be validated during the sprint.
+
+Scenario-specific interpretation:
+
+- **Buying:** the first observed constraint is expected at the first hard
+  position; positional matching should dominate immediately.
+- **Browsing:** after the first `other` reply, the first two observed constraints
+  correspond to the beginning of the ordered signature.
+- **Override:** the old preference may match a soft signature position; after
+  replacement, it must stop contributing while the new hard constraint becomes
+  dominant.
+- **Boundary:** the first no-preference reply contributes nothing; ranking should
+  continue using category, previous evidence, and unseen coverage.
+
+### 10.9 Question and response contract
+
+Default ambiguous-turn response:
+
+```python
+{
+    "message": (
+        "What other requirement matters most—material, color, fit, style, "
+        "budget, or intended use?"
+    ),
+    "ask_attribute": "other",
+    "recommendations": ranked_unseen_top_k,
+    "usage": {"prompt_tokens": 0, "completion_tokens": 0},
+}
+```
+
+Use `ask_attribute=None` when:
+
+- `turn >= 10`;
+- the question policy has exhausted meaningful clarifications; or
+- the implementation intentionally avoids a redundant question after receiving
+  all available signature constraints.
+
+Possible no-question message:
+
+```text
+Here are the strongest matches based on your current requirements.
+```
+
+The natural message need not enumerate recommendations. The evaluator scores the
+structured recommendation list.
+
+### 10.10 Worked behavior examples
+
+These examples use placeholders and must not introduce real public target ASINs.
+
+#### Browsing flow
+
+```text
+Turn 1 customer:
+  I'm looking for Shirts Casual Button-Down Shirts, but I'm still exploring.
+
+Agent state after parsing:
+  mode=browsing
+  category="shirts casual button-down shirts"
+  constraints=[]
+
+Agent response:
+  asks `other`
+  returns 10 category/BM25 candidates
+
+Turn 2 customer:
+  For that, what matters is: cotton; Button closure.
+
+Agent state after parsing:
+  constraints=["cotton", "button closure"]
+
+Agent response:
+  exact ordered signature matches first
+  unseen BM25 matches fill remaining positions
+  asks `other` again only if ambiguity remains
+```
+
+#### Intent Override flow
+
+```text
+Turn 1 customer:
+  I'm looking for Jackets. lightweight casual style
+
+Agent state:
+  mode=override candidate
+  old_preference="lightweight casual style"
+
+Later customer:
+  Actually, ignore my earlier preference. What I need is: leather.
+
+Correct update:
+  remove "lightweight casual style"
+  preserve any separately disclosed color/fit/category constraints
+  add "leather"
+
+Incorrect update:
+  clear the entire conversation state
+```
+
+#### Boundary flow
+
+```text
+Customer:
+  I don't have a preference for other; please use your judgment.
+
+Correct update:
+  do not add a constraint
+  do not remove products that have an "other" attribute
+  return unseen candidates
+  ask again on the next eligible turn
+```
+
+### 10.11 Detailed test matrix
+
+Person B should prioritize the P0 tests. P1 tests are added only if P0 is green
+before the integration gate.
+
+| Priority | Test | Setup | Expected result |
+|---|---|---|---|
+| P0 | Reset required | Call `respond` before `reset` | Clear `RuntimeError` or documented failure |
+| P0 | Response schema | One valid reset/respond | All required keys and correct types |
+| P0 | Valid ASINs | Mini catalog plus response | Every result belongs to mini catalog |
+| P0 | Unique current list | Candidate ties | No repeated ASIN in response |
+| P0 | Cross-turn dedupe | Two turns, no target stop | Second list excludes first list |
+| P0 | Session isolation | Interleave two session IDs | Constraints/seen sets never cross |
+| P0 | Buying parse | Buying opening | Category and hard constraint stored |
+| P0 | Browsing parse | Browsing opening | Category stored, no fabricated constraint |
+| P0 | Constraint accumulation | Two clarification replies | Ordered unique constraints retained |
+| P0 | Override | Old plus independent constraints, then replacement | Only old value removed |
+| P0 | Boundary | No-preference reply | Pool remains valid; no false negative slot |
+| P0 | Empty lexical query | Empty/stopword message | Valid fallback recommendations |
+| P0 | Missing metadata | Products with null fields | Initialization and response succeed |
+| P0 | Determinism | Two identical Agent runs | Same recommendation order |
+| P1 | Exact signature priority | One exact and several popular near matches | Exact product ranks first |
+| P1 | Failed intersection | Unknown constraint | Prior candidate pool retained |
+| P1 | Top-k respect | `top_k` below catalog size | Exact requested count when available |
+| P1 | Turn 10 | Final turn | Valid recommendations; no unnecessary question |
+| P1 | Full public evaluator | Official catalog/public set | Completes with no exceptions |
+
+Mini-catalog tests should use `tempfile.TemporaryDirectory()` and generated JSONL
+fixtures. Do not depend on the 58 MB decompressed catalog for every unit test.
+
+### 10.12 Performance and operational requirements
+
+These are practical targets, not competition-enforced limits:
+
+- Initialization: under 60 seconds on the submission machine.
+- Average `respond()` latency: under 250 ms for the offline route.
+- Memory: comfortably below 500 MB.
+- Network calls: zero during initialization and response.
+- Model tokens: zero.
+- Model/API cost: zero.
+- Disk writes during evaluation: only the evaluator's documented results output.
+- Logging: concise; do not print 50,000 product rows or customer profiles.
+
+If measurements exceed these targets but the evaluator completes reliably, report
+the actual numbers honestly rather than performing risky late optimization.
+
+### 10.13 Final repository shape
+
+The frozen repository should look approximately like:
+
+```text
+shopping-copilot/
+  CLAUDE.md                       team execution and technical decisions
+  README.md                       public project documentation
+  NOTES.md                        evaluator facts and design rationale
+  ABLATION.md                     measured experiments
+  DEVPOST.md                      copy-ready submission text
+  DEMO_SCRIPT.md                  timed three-minute narration
+  DATA_ATTRIBUTION.md             organizer/upstream attribution
+  SHA256SUMS                      frozen-asset checksums
+  catalog.jsonl.gz                official catalog archive
+  requirements.txt                actual dependencies only
+  starter/
+    __init__.py
+    agent.py                      only production Agent implementation
+  evaluator/                      unmodified official evaluator
+  data/
+    README.md
+    public_set.jsonl              unmodified public development labels
+    catalog.jsonl                 local ignored decompressed catalog
+  docs/                           organizer contracts and rules
+  tests/
+    test_evaluator.py             organizer tests
+    test_agent.py                 participant contract/state tests
+```
+
+Do not track:
+
+```text
+.env
+data/catalog.jsonl
+results.json
+API response caches containing sensitive prompts
+private/final evaluation data
+```
+
+### 10.14 Collaboration handoff protocol
+
+Long explanations in chat slow the sprint. Use this compact status format at
+minutes 45, 55, 80, 95, 110, and 160:
+
+```text
+[ROLE] [MINUTE] [COMMIT]
+DONE: <one sentence>
+RESULT: <score/test/video status>
+BLOCKER: <none or one concrete blocker>
+NEXT: <one next action before next gate>
+NEED FROM PARTNER: <none or one concrete item>
+```
+
+Example:
+
+```text
+AGENT 55 a1b2c3d
+DONE: Signature route, state, dedupe, and BM25 fallback run end-to-end.
+RESULT: Smoke test green; full evaluator not yet complete.
+BLOCKER: None.
+NEXT: Tune override positional ranking while RC1 is evaluated.
+NEED FROM PARTNER: Overall and per-scenario RC1 metrics.
+```
+
+Metric handoff format:
+
+```text
+COMMIT: <sha>
+HIT@10: <value>
+MRR: <value>
+MTTC: <value>
+EFFICIENCY: <value>
+TECHNICAL SCORE: <value>
+BUYING HIT/MRR/MTTC: ...
+BROWSING HIT/MRR/MTTC: ...
+OVERRIDE HIT/MRR/MTTC: ...
+BOUNDARY HIT/MRR/MTTC: ...
+RUNTIME: ...
+EXCEPTIONS: 0
+```
+
+Handoff rules:
+
+- A commit hash is required for every metric claim.
+- "It works on my machine" without a command and commit is not evidence.
+- A blocker message includes the failed command and first actionable error, not a
+  full terminal dump.
+- The partner receiving a blocker acknowledges it, but does not abandon their
+  own exclusive work unless it threatens the next hard gate.
+- Feature ideas discovered after code freeze go into README future work, not the
+  Agent.
+
+### 10.15 Detailed submission evidence package
+
+Retain the following locally even when ignored by Git:
+
+```text
+submission-evidence/
+  frozen_commit.txt
+  public_results.json
+  public_metrics_summary.txt
+  test_output.txt
+  environment.txt
+  runtime.txt
+  video_url.txt
+  devpost_url.txt
+  submission_confirmation.png
+```
+
+Suggested environment record:
+
+```text
+Date/time and timezone
+Frozen Git commit and tag
+Operating system
+Python version
+CPU and memory
+Dependency versions
+Catalog SHA-256
+Evaluator command
+Total evaluator runtime
+External network dependency: none
+Model/API: none
+Prompt/completion tokens: 0/0
+Estimated model cost: $0
+```
+
+The evidence directory need not be committed. It exists so either teammate can
+answer organizer questions without reconstructing facts from memory.
+
+### 10.16 Final quality rubric
+
+Before calling the final product complete, score it internally:
+
+| Area | Pass condition |
+|---|---|
+| Correctness | Required Agent interface; valid unique ASINs; isolated state; no exceptions |
+| Retrieval | Measured improvement over baseline; exact signatures prioritized; fallback never empty |
+| Dialogue | Buying/Browsing/Override/Boundary handled; recommendations and questions coexist |
+| Rules | Catalog/public labels/evaluator unchanged; no secret or private data committed |
+| Reproducibility | Fresh setup follows README and reproduces evaluator run |
+| Evidence | Metrics tied to frozen commit; ablations and environment recorded |
+| Communication | Architecture, decisions, limitations, and contributions are understandable |
+| Demo | Public, ≤3 minutes, complete trace, metrics, and reproduction shown |
+| Submission | Public repo and video links work; Devpost confirmation captured |
+
+Any failure in Correctness, Rules, Reproducibility, Demo, or Submission blocks
+completion. A lower-than-target score does not block submission if the system is
+valid, measured, and clearly explained.
+
+### 10.17 Explicit non-goals for the frozen sprint product
+
+Do not accidentally expand the final product into any of the following:
+
+- production web service or frontend;
+- user authentication or persistent cross-user profiles;
+- external vector database;
+- live catalog updates;
+- real Amazon purchasing or product-page integration;
+- multimodal image understanding;
+- spelling correction or ASR cleanup;
+- model training or fine-tuning;
+- asynchronous/multi-user load handling;
+- private-label inference;
+- generation of new ASINs;
+- claims of private-set performance before that set is released.
+
+These are appropriate future-work items only when they support the product story.
