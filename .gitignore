@@ -17,6 +17,12 @@ secure/
 # Internal provenance and release-audit working documents.
 docs/audits/
 docs/audits.zip
+# Team-only planning, publication copy, and account handoff.
+CLAUDE.md
+NOTES.md
+DEVPOST.md
+DEMO_SCRIPT.md
+SUBMISSION_STEPS.md
 docs/data_selection_audit.md
 docs/participant_release_checklist.md
 # Organizer-only pipeline tests.
