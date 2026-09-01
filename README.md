@@ -3,167 +3,183 @@
 **A stateful conversational shopping copilot that turns vague or changing intent
 into ranked, catalog-valid recommendations within a ten-turn budget.**
 
-IntentCart is our TechJam 2026 Track 4 submission. It is designed for the frozen
-50,000-product Amazon Reviews 2023 clothing catalog and the organizer's exact
-`Agent` interface. On each turn it can recommend up to ten products, ask one
-structured clarification question, or do both.
+IntentCart is our TechJam 2026 Track 4 submission for the frozen 50,000-product
+Amazon Reviews 2023 clothing catalog. It implements the organizer's exact Python
+`Agent` interface and can recommend ten products while asking a structured
+clarification question in the same turn.
 
-> **Release-candidate status:** Agent commit `00f1e41` is independently verified
-> at TechnicalScore 0.889896 and passes 24/24 tests. The remaining `PENDING_*`
-> fields require the final integrated commit/tag, team names, and public URLs.
-> Re-run the freeze gate after applying the delivery commit; do not relabel the
-> RC hash as the integrated hash without that final run.
+> **Verified release status:** `submission-v2` passes 33/33 tests and scores
+> **0.935151** on the 200-session public development set, with 100% Hit@10 in
+> every scenario. Two full runs produced byte-identical JSON. The immutable
+> `submission-v1` control remains available for exact side-by-side comparison.
 
-## The problem
+## Why conversational search
 
-Keyword retrieval works well when a shopper already knows what to type. It is
-much weaker when the shopper starts with “I'm still exploring,” adds constraints
-over several turns, or replaces an earlier preference. The challenge is therefore
-not just document retrieval: it is sequential decision-making under a strict
-turn budget.
+Static keyword search assumes the shopper can express the complete need in one
+query. That assumption fails when a shopper begins with “I'm still exploring,”
+adds requirements over several turns, or replaces an earlier preference. This
+challenge is therefore a sequential decision problem, not only document search.
 
-The hidden target is a real parent product in the frozen catalog. A session ends
-when that exact `parent_asin` appears in the scored top ten or after turn 10. The
-four evaluator scenarios test different failure modes:
+Each turn jointly decides:
 
-| Scenario | Customer behavior | Required Agent behavior |
+1. which products are most likely to satisfy the current intent;
+2. which unseen alternatives add useful coverage; and
+3. which clarification can reduce uncertainty before the ten-turn limit.
+
+Recommendation rank controls MRR, later conversion is penalized by MTTC, and a
+question still consumes a turn. IntentCart consequently asks and recommends in
+the same response.
+
+| Scenario | Customer behavior | IntentCart behavior |
 |---|---|---|
-| Buying | Gives a category and hard requirement early | Lock the constraint and rank precise matches immediately |
-| Browsing | Starts vague | Recommend broadly while asking for useful missing information |
-| Intent Override | Replaces an earlier preference | Erase only the stale value and preserve independent context |
-| Boundary | Declines to provide a preference | Keep a valid fallback; never turn “no preference” into a hard negative |
-
-## Key insight
-
-Conversational shopping is a form of sequential experiment design. Every turn
-must balance three jobs:
-
-1. rank the strongest current candidates as highly as possible;
-2. spend the remaining recommendation positions on useful, previously unseen
-   coverage; and
-3. ask for information that can shrink uncertainty without sacrificing the
-   current turn's recommendations.
-
-This matters because a question consumes a turn, recommendation rank controls
-MRR, and a late hit is penalized by MTTC. IntentCart therefore asks and
-recommends in the same response.
+| Buying | Gives a category and hard requirement early | Selects the precision route and protects exact constraint matches |
+| Browsing | Starts vague | Selects discovery, uses profile context softly, broadens recall, and covers product families |
+| Intent Override | Replaces an earlier preference | Erases only stale evidence and starts a new recommendation-eligibility epoch |
+| Boundary | Declines a preference | Treats the answer as neutral and retains a valid fallback |
 
 ## Architecture
 
 ```mermaid
 flowchart LR
-    A[reset: anonymous profile] --> B[isolated SessionState]
-    C[current customer message] --> D[template-aware turn parser]
-    B --> D
-    D --> E{intent route}
-    E -->|Buying / constrained| F[catalog-signature precision pool]
-    E -->|Browsing / fallback| G[accumulated-context BM25 pool]
-    F --> H[deterministic merge and rank]
-    G --> H
-    H --> I[exclude ASINs shown on earlier turns]
-    I --> J[top-k recommendations]
-    D --> K[clarification policy]
-    K --> L[message + structured ask_attribute]
-    J --> M[contract-valid response]
+    A[immutable 50k catalog] --> B[signature/category indexes]
+    A --> C[in-memory SQLite FTS5]
+    D[anonymous supplied profile] --> E[isolated session state]
+    F[current message] --> G[parser + slot update]
+    E --> G
+    G --> H{deterministic orchestrator}
+    H -->|precision| I[exact constraint pool]
+    H -->|discovery| J[category + BM25 + profile pool]
+    H -->|override recovery| K[recomputed eligible pool]
+    H -->|fallback| L[lexical/category/global pool]
+    I --> M[deterministic rank]
+    J --> M
+    K --> M
     L --> M
-    M --> B
+    M --> N[small exact-pool popularity calibration]
+    N --> R[family coverage + unseen-ASIN filter]
+    R --> O[Top 10]
+    H --> P[clarification policy]
+    O --> Q[contract-valid response]
+    P --> Q
+    Q --> E
 ```
 
-### 1. Catalog-signature precision route
+### Catalog-derived precision
 
-At initialization the Agent derives normalized, catalog-only intent signatures
-from titles, category paths, feature bullets, product details, store, and the
-available description. It builds lightweight reverse indexes for exact category
-and constraint matching. No public target labels are imported by the Agent.
+At initialization the Agent derives normalized intent signatures from catalog
+titles, categories, features, details, store, description, and available price.
+It builds reverse indexes for exact category and constraint lookup. Hard
+constraints narrow the pool only when the intersection is non-empty, preventing
+sparse or unknown metadata from collapsing recall.
 
-When a hard requirement is present, exact signature evidence is preferred over
-generic lexical overlap. Intersections are applied only when they remain
-non-empty, so a sparse or unknown attribute cannot collapse retrieval.
+Ranking is deterministic. Positional signature matches, anywhere-signature
+matches, and category evidence remain protected. In v2, popularity moves ahead
+of weaker lexical/profile tie-breaks only after the shopper has supplied an
+explicit constraint and the exact candidate pool contains at most 20 products.
+This catalog-only calibration is disabled for broad pools. The Agent never
+imports public targets, hidden intent cards, or scenario labels.
 
-### 2. Accumulated-context BM25 fallback
+### Explicit runtime routing
 
-SQLite FTS5 provides deterministic lexical recall over the 50,000 catalog
-records. Unlike the stateless starter, the retrieval query uses valid accumulated
-session context rather than only the newest message. It remains a fallback when
-exact indexes cannot identify enough candidates.
+The orchestrator chooses one of four inspectable policies from observed state:
 
-### 3. Dialogue state and override handling
+- `precision` for Buying with a hard constraint;
+- `discovery` for Browsing;
+- `override_recovery` after an explicit intent replacement; and
+- `fallback` for incomplete or unexpected messages.
 
-Every session owns separate mutable state: category, ordered constraints,
-scenario mode, copied profile context, question history, and already shown ASINs.
-`reset()` creates a clean state for one session. An override removes the stated
-old preference and adds its replacement without discarding unrelated constraints.
-Because Intent Override targets cannot score before the explicit replacement
-turn, that transition starts a new recommendation-eligibility epoch: candidates
-shown too early may be considered again after the intent becomes scoreable.
+Policies differ in retrieval depth, profile use, diversity, clarification text,
+and recovery behavior. Each decision records only safe operational facts—turn,
+route, candidate count, question decision, and whether profile terms were used—
+inside that session for tests and demos. Production code does not print profiles.
 
-The supplied anonymized profile is copied into isolated session state, but this
-RC does **not** use profile tags or summaries to change ranking. We disclose this
-boundary explicitly rather than calling storage alone “personalization.”
+### Lexical recall and supplied-profile conditioning
 
-### 4. Clarification and coverage policy
+SQLite FTS5 supplies BM25 recall over all 50,000 products. Queries combine the
+current category, accumulated constraints, and current message. The documented
+`preference_tags` and `summary` fields are deep-copied at `reset()`, distilled
+into compact normalized terms, and used only as a soft discovery signal.
 
-If the candidate pool remains broad and another turn is available, the Agent asks
-a natural multi-facet question while setting `ask_attribute` to `other`. This is
-deliberate: the official simulator can reveal up to two undisclosed constraints
-for `other`, whereas a specific attribute can reveal only matching classified
-constraints. Turn 10 returns recommendations without an unusable follow-up.
+Profile context never hard-filters a product. After two explicit session
+constraints, the lower-confidence profile terms are dynamically truncated so
+current intent wins. No identity, demographics, raw history, or cross-session
+memory is inferred or persisted.
 
-The evaluator does not deduplicate across turns. IntentCart records shown ASINs
-per session so a miss becomes evidence and later turns cover unseen candidates.
+### State, confidence, and override recovery
 
-### 5. Deterministic, zero-model-cost release path
+Every session owns its category, mode, ordered constraints, slot metadata,
+profile context, route history, question history, candidate count, eligibility
+epoch, and shown ASINs. Constraint metadata records value, source, confidence,
+introduction/confirmation turn, and whether it is hard.
 
-The sprint release uses Python's standard library and SQLite FTS5. It makes no
-network calls and uses no external LLM, embedding API, or vector database. Usage
-is reported as zero prompt and completion tokens. Popularity is only a final
-tie-breaker after intent relevance; it never replaces matching evidence.
+Explicit constraints do not decay. An override removes the named stale value,
+preserves independent evidence, and increments the eligibility epoch. This lets
+the Agent reconsider a product shown before the evaluator permits an Override
+hit. “No preference” adds no negative slot.
 
-This is an intentional feasibility choice, not a claim that semantic models are
-unhelpful. The organizer permits non-LLM solutions, and the frozen release favors
-reproducibility over an unmeasured late dependency.
+### Clarification, family coverage, and failure behavior
 
-## Why the approach generalizes
+When the candidate pool is larger than the returned list and another turn is
+available, the Agent recommends and asks `ask_attribute="other"`. The official
+simulator can disclose up to two still-hidden constraints for this attribute.
+Turn 10 never asks an unusable follow-up.
 
-- The Agent indexes only fields in the frozen catalog and never reads public
-  targets or evaluator intent cards.
-- No public target ASIN is hardcoded.
-- The retrieval and state rules apply equally to the four published scenarios.
-- Deterministic ordering makes failures reproducible and ablations meaningful.
-- Exact matching is paired with a lexical fallback, so missing metadata does not
-  eliminate all candidates.
-- Three independent full runs of the selected RC produced byte-identical result
-  JSON. This is public-development reproducibility evidence, not a private-set
-  generalization claim.
+Unconstrained discovery permits at most two products from one normalized
+store/title family before covering another family, then backfills deterministically.
+Once explicit constraints exist, precision takes priority and diversity cannot
+displace a matching item. Shown ASINs are excluded within an eligibility epoch.
+
+If exact lookup misses, the last non-empty pool survives. SQLite errors fall back
+to deterministic category/global order, missing optional metadata is tolerated,
+and response construction has a catalog-valid fallback.
+
+### Selected runtime and the LLM experiment
+
+The selected v2 runtime is still Python's standard library plus SQLite FTS5. It
+makes no network calls, needs no API key, reports 0/0 tokens, and has US$0 model
+cost. This is a measured selection, not an assumption that an LLM cannot help.
+
+The repository also contains an opt-in OpenAI Responses API reranker. It can
+only permute the deterministic top-10 candidate set, uses strict structured
+output, and falls back on every configuration, API, timeout, or validation
+failure. On a bounded 10-session comparison it made 11 calls, applied 9 valid
+results, encountered two safe fallbacks, consumed 25,020 input and 953 output
+tokens (estimated US$0.006195), and changed TechnicalScore by **0.000000**.
+Because it added cost, latency, and failure modes without a measured gain, it is
+disabled in the frozen default. See [V2_COMPARISON.md](V2_COMPARISON.md).
 
 ## Repository layout
 
 ```text
 .
 ├── starter/agent.py              production Agent entry point
+├── starter/llm_reranker.py       optional validated API experiment
+├── compare_versions.py           exact v1/v2/optional-hybrid harness
+├── demo.py                       reproducible Browsing/Override traces
+├── DEMO_OUTPUT.md                captured end-to-end inference evidence
 ├── evaluator/local_evaluator.py  unmodified official evaluator
-├── tests/test_agent.py           participant contract/state tests
+├── tests/test_agent.py           participant contract/state/routing tests
 ├── tests/test_evaluator.py       organizer evaluator tests
+├── tests/test_v2.py              v2 calibration/API/fallback tests
 ├── data/public_set.jsonl         200 public development sessions
 ├── data/catalog.jsonl            local decompressed catalog; Git-ignored
 ├── docs/                         official contract, rules, FAQ, and config
 ├── ABLATION.md                   commit-linked experiment record
-├── NOTES.md                      evaluator facts and design rationale
-├── DATA_ATTRIBUTION.md           dataset provenance and license notes
-├── requirements.txt              runtime dependency declaration
+├── V2_COMPARISON.md              v1/v2 selection evidence
+├── DATA_ATTRIBUTION.md           dataset provenance and usage notes
+├── requirements.txt              standard-library runtime declaration
 └── SHA256SUMS                    official asset checksums
 ```
 
 ## Requirements
 
-- Python 3.10 or later; this is required because the Agent uses slotted
-  dataclasses (independent release validation used Python 3.12.14)
-- A Python build with SQLite FTS5 enabled
-- Approximately 60 MB free for the decompressed catalog, plus index space
-- No GPU, API key, network service, or paid model
-- Runtime Python dependencies: standard library only
+- Python 3.10 or later (verified with Python 3.12.5 and 3.12.14)
+- Python's bundled SQLite with FTS5 enabled
+- Approximately 60 MB for the decompressed catalog, plus in-memory indexes
+- No GPU, API key, network service, third-party Python package, or paid model
+  for the selected runtime
 
-Check FTS5 support with:
+Check FTS5:
 
 ```bash
 python3 -c "import sqlite3; sqlite3.connect(':memory:').execute('CREATE VIRTUAL TABLE t USING fts5(x)'); print('FTS5 available')"
@@ -171,254 +187,217 @@ python3 -c "import sqlite3; sqlite3.connect(':memory:').execute('CREATE VIRTUAL 
 
 ## Setup
 
-1. Clone the public repository and enter it:
+```bash
+git clone https://github.com/shang-yi-qian/shopping-copilot.git
+cd shopping-copilot
+python3 -m venv .venv
+source .venv/bin/activate
+python3 -m pip install -r requirements.txt
+```
 
-   ```bash
-   git clone PENDING_PUBLIC_REPOSITORY_URL
-   cd shopping-copilot
-   ```
-
-2. Use an isolated Python environment. There are no third-party packages to
-   download, but isolation records the interpreter used for evaluation:
-
-   ```bash
-   python3 -m venv .venv
-   source .venv/bin/activate
-   python3 --version
-   python3 -m pip install -r requirements.txt
-   ```
-
-3. Download `catalog.jsonl.gz` from the organizer's
-   [participant-kit release](https://github.com/TechJam2026/techjam-conversational-search/releases/tag/participant-kit)
-   if it is not included in the repository.
-
-4. Verify the exact catalog archive. The digest must be:
-   `07fd142631fd6b03e2b4d09988c3eb7d53720e9d57010c79db48eeaada50a8f8`.
-
-   macOS:
-
-   ```bash
-   shasum -a 256 catalog.jsonl.gz
-   ```
-
-   Linux:
-
-   ```bash
-   sha256sum catalog.jsonl.gz
-   ```
-
-5. Decompress the read-only catalog into its ignored runtime location:
-
-   ```bash
-   mkdir -p data
-   gzip -dc catalog.jsonl.gz > data/catalog.jsonl
-   ```
-
-The Agent treats `data/catalog.jsonl` as immutable. Do not edit the catalog,
-public labels, or evaluator when producing reported results.
-
-## Run and reproduce
-
-Run all organizer and participant tests:
+If `catalog.jsonl.gz` is not present, download it from the organizer's
+[participant-kit release](https://github.com/TechJam2026/techjam-conversational-search/releases/tag/participant-kit).
+Verify and decompress it:
 
 ```bash
+# macOS
+shasum -a 256 catalog.jsonl.gz
+
+# Linux
+sha256sum catalog.jsonl.gz
+
+mkdir -p data
+gzip -dc catalog.jsonl.gz > data/catalog.jsonl
+```
+
+The expected archive SHA-256 is
+`07fd142631fd6b03e2b4d09988c3eb7d53720e9d57010c79db48eeaada50a8f8`.
+The expected decompressed catalog SHA-256 is
+`da979b05a68af864cb0dcf9ee6a81c010c7e66a57978ad286c7a2e005fc69a67`.
+The Agent treats the catalog as immutable.
+
+## Run, test, and demonstrate
+
+```bash
+# 30 participant tests + 3 organizer tests
 python3 -m unittest discover -s tests -v
-```
 
-Run the unmodified official public evaluator:
-
-```bash
+# Official public evaluator
 python3 -m evaluator.local_evaluator --output results.json
+
+# Readable Browsing and Intent Override traces
+python3 demo.py
+
+# Exact v1 versus deterministic v2 comparison
+python3 compare_versions.py
 ```
 
-Optionally record wall-clock runtime separately:
+An optional, bounded API experiment is reproducible with
+`python3 compare_versions.py --with-llm --env-file .env --limit 10`. Copy
+`.env.example` to `.env`, use a rotated key, and never commit it. The official
+evaluator and default `Agent` do not load `.env` or enable the API path.
 
-```bash
-/usr/bin/time -p python3 -m evaluator.local_evaluator \
-  --output /tmp/intentcart-public-results.json
-```
-
-The evaluator initializes `Agent(data/catalog.jsonl)`, calls `reset()` once per
-session, and calls `respond()` for at most ten turns. `results.json` contains
-aggregate and per-session evidence and is intentionally Git-ignored.
+`results.json` is intentionally Git-ignored. Do not modify the catalog, public
+labels, evaluation config, or evaluator when reproducing reported results.
 
 ## Public development results
 
-These results are from the released 200-session public development set. They are
-not private/final-set claims. Person B independently reproduced both the baseline
-and Agent RC with the unmodified official evaluator. The selected RC changes only
-`starter/agent.py` relative to its parent.
+These numbers are from the released 200-session public development set, not the
+unreleased 800-session final set.
 
 | Agent | Commit | Hit@10 | MRR | MTTC | Efficiency | TechnicalScore |
 |---|---|---:|---:|---:|---:|---:|
-| Organizer BM25 baseline | `02f15cd` | 0.125000 | 0.068034 | 9.810000 | 0.119000 | 0.106710 |
-| IntentCart Agent RC | `00f1e41` | 1.000000 | 0.707655 | 2.120000 | 0.888000 | 0.889896 |
+| Organizer BM25 baseline | organizer release | 0.125000 | 0.068034 | 9.810000 | 0.119000 | 0.106710 |
+| Stateful signature control | `00f1e41` | 1.000000 | 0.707655 | 2.120000 | 0.888000 | 0.889896 |
+| IntentCart v1 (`submission-v1`) | `50bc78e` | 1.000000 | 0.709905 | 2.120000 | 0.888000 | 0.890571 |
+| IntentCart v2 (`submission-v2`) | resolve tag | **1.000000** | **0.856504** | **2.090000** | **0.891000** | **0.935151** |
 
 Scenario cells are `Hit@10 / MRR / MTTC`:
 
 | Agent | Buying | Browsing | Intent Override | Boundary |
 |---|---|---|---|---|
 | Baseline | 0.237500 / 0.126508 / 8.625000 | 0.025000 / 0.004514 / 10.750000 | 0.133333 / 0.104167 / 10.066667 | 0.000000 / 0.000000 / 11.000000 |
-| IntentCart RC | 1.000000 / 0.697480 / 1.600000 | 1.000000 / 0.671657 / 1.962500 | 1.000000 / 0.811667 / 3.666667 | 1.000000 / 0.765000 / 2.900000 |
+| Control | 1.000000 / 0.697480 / 1.600000 | 1.000000 / 0.671657 / 1.962500 | 1.000000 / 0.811667 / 3.666667 | 1.000000 / 0.765000 / 2.900000 |
+| v1 | 1.000000 / 0.703730 / 1.612500 | 1.000000 / 0.671032 / 1.950000 | 1.000000 / 0.811667 / 3.666667 | 1.000000 / 0.765000 / 2.900000 |
+| v2 | **1.000000 / 0.893889 / 1.550000** | **1.000000 / 0.791329 / 1.950000** | **1.000000 / 0.909444 / 3.633333** | **1.000000 / 0.920000 / 2.900000** |
 
-Release environment and feasibility disclosure:
+V2 preserves 100% Hit@10 in every scenario, improves TechnicalScore by 0.044580,
+and improves every scenario's MRR. At the session level it is better on 59,
+equal on 132, and worse on 9 sessions; all five deterministic ID-hash slices
+improve. These are public-development observations, not private-set guarantees.
 
-| Item | Frozen measurement |
-|---|---|
-| Python version | 3.12.14 |
-| SQLite | 3.53.4 with FTS5 |
-| Hardware / operating system | Apple M4 MacBook Pro, 16 GB, macOS 15.5 arm64 |
-| Agent initialization time | 7.785188 s |
-| Independent cold evaluator wall time | 20.85 s (`user` 20.45, `sys` 0.25) |
-| Partner handoff runtime | approximately 13 s; retained as a separate environment measurement |
-| Average response latency | 28.880855 ms over 424 calls |
-| Median / P95 / maximum response latency | 26.362625 / 62.312896 / 110.095083 ms |
-| Maximum resident memory | 416,415,744 bytes (397.125 MiB) |
-| External network calls | 0 |
-| Model/API | None |
+### Feasibility evidence
+
+Measurements below are for the selected v2 on an Apple M2 Pro MacBook Pro, 16 GB,
+macOS 26.5.2 arm64, Python 3.12.5, and SQLite 3.45.3 with FTS5.
+
+| Item | Measurement |
+|---|---:|
+| Catalog load | 0.439159 s |
+| Agent initialization | 4.936199 s |
+| Evaluation after setup | 8.873643 s |
+| Cold evaluator wall time | 14.49 s |
+| `respond()` calls | 418 |
+| Mean response latency | 21.130810 ms |
+| Median / P95 / maximum latency | 18.925041 / 40.664084 / 66.037625 ms |
+| Maximum resident memory | 438,288,384 bytes (418.0 MiB) |
 | Prompt / completion tokens | 0 / 0 |
 | Estimated model cost | US$0 |
+| Runtime network calls | 0 |
 
-The independently saved RC result JSON has SHA-256
-`980e6288c63e2222cd85d21051df1a7238bacdbe294bdf5033a2059678a58829`.
-Organizer tests passed 3/3 and participant Agent tests passed 21/21 under the
-same RC. Three full evaluator runs produced byte-identical JSON. See
-[NOTES.md](NOTES.md) for the exact environment and audit trail.
-
-See [ABLATION.md](ABLATION.md) for the full commit-linked experiment log and
-[NOTES.md](NOTES.md) for the evidence behind design choices.
+Two selected-build runs produced byte-identical JSON with SHA-256
+`7b553ce517e7c3122a9df21261703027b07e03b0321c1720b60969173065d31e`.
+All 30 participant tests and 3 organizer tests pass. See
+[V2_COMPARISON.md](V2_COMPARISON.md) and [ABLATION.md](ABLATION.md) for the
+evidence trail.
 
 ## Verified multi-turn examples
 
-These condensed traces were captured from Agent RC `00f1e41` with the official
-public simulator policy. Product identifiers are omitted from the README; the
-saved evaluator result retains the exact scored evidence.
+Run `python3 demo.py` to reproduce both complete traces. The helper uses public
+ground truth only to label the outcome after each response; the Agent never sees
+it. [DEMO_OUTPUT.md](DEMO_OUTPUT.md) preserves the verified ranked predictions
+and outcomes as a reviewable evidence artifact.
 
 ### Browsing — `public_0007`
 
-```text
-Turn 1 customer:
-  I'm looking for Tees & Blouses Tunics, but I'm still exploring.
-
-Turn 1 Agent:
-  returns 10 ranked category/BM25 candidates
-  asks what requirement matters most
-  ask_attribute=other
-  target is not in the scored Top 10
-
-Turn 2 customer:
-  For that, what matters is: polyester; 75% Polyester, 20% Rayon, 5% Spandex.
-
-State before ranking:
-  mode=browsing
-  category=tees & blouses tunics
-  constraints=[polyester, "75% polyester, 20% rayon, 5% spandex"]
-  turn-1 ASINs remain excluded
-
-Turn 2 Agent:
-  returns the target at rank 1
-  ask_attribute=None because the narrowed pool is already confident
-  session stops successfully
-```
+- Turn 1 selects `discovery`, recommends ten unseen products, and asks `other`.
+- The customer reveals `polyester` and a composition requirement.
+- Profile terms are dynamically truncated once explicit evidence is sufficient.
+- Turn 2 narrows 519 candidates to one exact candidate and finds the target at
+  rank 1.
 
 ### Intent Override — `public_0003`
 
-```text
-Turn 1 customer supplies category Watches Wrist Watches and an old preference.
-Agent saves the old preference as stale context, asks other, and recommends.
+- Turn 1 stores the category and explicitly stale preference.
+- Turn 2 reveals two valid requirements and contains the target at rank 1, but
+  the evaluator correctly treats it as not yet eligible.
+- Turn 3 explicitly replaces the old preference, selects `override_recovery`,
+  increments the eligibility epoch, and finds the now-eligible target at rank 1.
 
-Turn 2 customer reveals Water Resistant and 3 Year Battery.
-The target appears at rank 1, but the evaluator correctly does not score it yet.
+## Ablation summary
 
-Turn 3 customer explicitly replaces the earlier preference with Water Resistant.
-Agent starts a new eligibility epoch, preserves valid context, ranks the target
-at 1 again, and the evaluator records the conversion on turn 3.
-```
+The v1 profile/diversity experiments remain reproducible in
+[ABLATION.md](ABLATION.md). For v2, the target-blind popularity calibration
+threshold was swept separately:
 
-## Limitations
+| V2 calibration | Hit@10 | MRR | MTTC | TechnicalScore |
+|---|---:|---:|---:|---:|
+| Disabled (v1 order) | 1.000000 | 0.709905 | 2.120000 | 0.890571 |
+| Candidate pool ≤20 (selected) | 1.000000 | 0.856504 | 2.090000 | **0.935151** |
+| Candidate pool ≤50 | 1.000000 | 0.853629 | 2.005000 | 0.935989 |
 
-- Exact target recovery is difficult when many parent products have nearly
-  identical generic metadata.
-- Standard-library lexical retrieval cannot infer every synonym or subtle
-  cross-category use case as well as a validated semantic model might.
-- The parser intentionally targets the organizer's published deterministic
-  message templates; free-form real-customer language would require broader
-  robustness testing.
-- The anonymized profile is isolated and retained but is not used for ranking in
-  this RC. Supplied-profile conditioning requires a separate measured ablation.
-- Price is present for only about 21% of catalog rows, so price cannot be a safe
-  unconditional hard filter.
-- Public-set improvements may not transfer perfectly to the unreleased final
-  set. The frozen build cannot be tuned after final labels are released.
-- The team did not preserve an untouched 40-session public holdout before the
-  full public set had been evaluated. We therefore make no holdout claim; the
-  separate 800-session final set is the true generalization check.
-- IntentCart is a headless retrieval Agent, not a production storefront,
-  transaction system, or safety/compliance layer.
+The ≤50 setting is 0.000838 higher on the aggregate public score, but ≤20 was
+selected because it is the more conservative eligibility rule, retains stronger
+worst-slice improvement, and is only twice the output capacity. No threshold is
+claimed to be statistically optimal.
 
-## What we would improve with more time
+## Limitations and next steps
 
-1. Add catalog-derived dense retrieval and validate its incremental value with a
-   frozen local model and reproducible artifact build.
-2. Learn posterior calibration and route thresholds without using evaluation
-   targets inside Agent logic.
-3. Expand parser tests to paraphrases, misspellings, and multilingual requests.
-4. Estimate information gain for specific clarification attributes rather than
-   relying on the simulator-efficient `other` route.
-5. Build a privacy-preserving preference memory with explicit user controls and
-   decay policies for real-world use.
-6. Add a lightweight service/UI only after the headless retrieval contract is
-   stable and measured.
+- The parser intentionally supports the organizer's deterministic templates;
+  real customer language needs paraphrase, typo, multilingual, and adversarial
+  robustness evaluation.
+- FTS5 and catalog signatures cannot infer every synonym or cross-category use
+  case as a validated semantic model might.
+- Profile tags are generic and are only a weak supplied prior, not learned or
+  persistent personalization.
+- Family is approximated from store or title; real commerce needs canonical
+  brand/product-family identifiers.
+- Price is populated for about 21% of rows, so it cannot be an unconditional
+  hard filter.
+- No untouched 40-session holdout was preserved before full-public iteration.
+  We therefore make no holdout or private-set claim.
+- The optional LLM stage did not improve the bounded comparison and is disabled
+  in the frozen runtime.
+- IntentCart is a headless retrieval Agent, not a storefront, transaction
+  system, or production policy/compliance layer.
+
+Credible next work is a licensed, reproducible in-memory dense route; broader
+language testing; information-gain estimation for specific questions; and a
+fixed-split semantic reranking study larger than the rejected bounded trial.
+Each must beat this frozen offline control before adoption.
 
 ## Data and asset attribution
 
-The frozen `Clothing_Shoes_and_Jewelry` catalog and sessions are
+The frozen `Clothing_Shoes_and_Jewelry` catalog and simulated sessions are
 organizer-prepared derivatives of
 [Amazon Reviews 2023](https://amazon-reviews-2023.github.io/) by McAuley Lab at
-UC San Diego. Session intents are simulated from catalog metadata and a
-deterministic scenario policy; they are not real shopping conversations. See
-[DATA_ATTRIBUTION.md](DATA_ATTRIBUTION.md) for the full attribution and usage
-notes.
+UC San Diego. They are not real shopping conversations. See
+[DATA_ATTRIBUTION.md](DATA_ATTRIBUTION.md) for full attribution and usage notes.
 
-Official participant resources:
-
-- [Participant repository](https://github.com/TechJam2026/techjam-conversational-search)
+- [Organizer participant repository](https://github.com/TechJam2026/techjam-conversational-search)
 - [Participant-kit release](https://github.com/TechJam2026/techjam-conversational-search/releases/tag/participant-kit)
 - [Final evaluation FAQ](docs/final_evaluation_faq.md)
 - [Submission rules](docs/submission_rules.md)
 
+The demo uses original terminal output and diagrams only—no product images,
+storefront captures, logos, webinar footage, third-party video, or copyrighted
+music.
+
 ## Team contributions
 
-Replace the names below before publishing; preserve the concrete ownership split.
+- **Tay Kai — Agent and integration lead:** catalog signatures, reverse indexes,
+  retrieval/ranking, state and override behavior, explicit orchestration,
+  profile conditioning, diversity, v2 calibration/API experiment, full
+  integration, and freeze verification.
+- **Yi Qian — Evaluation and delivery:** evaluator analysis, initial
+  contract/state tests, catalog audits, ablation evidence, reproducibility
+  documentation, and release handoff.
+- **Both teammates:** architecture review, measured control selection,
+  documentation review, and release decisions.
 
-- **`PENDING_PERSON_A_NAME` — Agent engineering:** catalog-derived signatures,
-  reverse indexes, retrieval/ranking, dialogue state, override behavior,
-  clarification policy, and production `starter/agent.py` integration.
-- **`PENDING_PERSON_B_NAME` — Evaluation and delivery:** evaluator analysis,
-  contract/state tests, catalog audits, ablation evidence, reproducible
-  setup, README, Devpost copy, demo script, and release/submission verification.
-- **Both teammates:** architecture selection, release-candidate review, frozen
-  evaluation, demo rehearsal, and final submission audit.
+## Release
 
-## Frozen release record
-
-Complete this block at code freeze and keep the generated evidence with the
-submission:
-
-```text
-Frozen commit: PENDING_FINAL_SHA
-Frozen tag: PENDING_FINAL_TAG
-Evaluation date/time/timezone: PENDING
-Catalog SHA-256: 07fd142631fd6b03e2b4d09988c3eb7d53720e9d57010c79db48eeaada50a8f8
-Official tests: PENDING
-Participant tests: PENDING
-Evaluator result: PENDING
-Public repository: PENDING_PUBLIC_REPOSITORY_URL
-Public demo video: PENDING_PUBLIC_VIDEO_URL
-Devpost: PENDING_DEVPOST_URL
-```
+- Public repository: <https://github.com/shang-yi-qian/shopping-copilot>
+- Frozen release tags: `submission-v1` (control) and `submission-v2` (selected)
+- Evaluation date: 2026-09-01 (Asia/Singapore)
+- Catalog archive SHA-256:
+  `07fd142631fd6b03e2b4d09988c3eb7d53720e9d57010c79db48eeaada50a8f8`
+- Tests: 33/33 passed
+- Public evaluator: Hit@10 1.0, MRR 0.856504, MTTC 2.09,
+  TechnicalScore 0.935151
+- External model/API: none; 0 tokens; US$0; no network dependency
 
 After the submission deadline, run the released 800-session package only against
-this frozen commit with the official evaluator unchanged. Retain the resulting
-JSON and environment record; do not update the Agent in response to private-set
+the immutable `submission-v2` tag with the official evaluator unchanged. Retain
+the resulting JSON and environment record; never tune the Agent on private-set
 results.
