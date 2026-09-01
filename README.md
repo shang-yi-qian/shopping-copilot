@@ -8,11 +8,10 @@ Amazon Reviews 2023 clothing catalog. It implements the organizer's exact Python
 `Agent` interface and can recommend ten products while asking a structured
 clarification question in the same turn.
 
-> **Verified release status:** Agent implementation commit `0ea7705` passes
-> 26/26 tests and scores **0.890571** on the 200-session public development set,
-> with 100% Hit@10 in every scenario. Two full runs produced byte-identical JSON.
-> The final release tag is `submission-v1`; resolve its exact immutable commit
-> with `git rev-parse submission-v1` after the release is published.
+> **Verified release status:** `submission-v2` passes 33/33 tests and scores
+> **0.935151** on the 200-session public development set, with 100% Hit@10 in
+> every scenario. Two full runs produced byte-identical JSON. The immutable
+> `submission-v1` control remains available for exact side-by-side comparison.
 
 ## Why conversational search
 
@@ -56,8 +55,9 @@ flowchart LR
     J --> M
     K --> M
     L --> M
-    M --> N[family coverage + unseen-ASIN filter]
-    N --> O[Top 10]
+    M --> N[small exact-pool popularity calibration]
+    N --> R[family coverage + unseen-ASIN filter]
+    R --> O[Top 10]
     H --> P[clarification policy]
     O --> Q[contract-valid response]
     P --> Q
@@ -72,10 +72,12 @@ It builds reverse indexes for exact category and constraint lookup. Hard
 constraints narrow the pool only when the intersection is non-empty, preventing
 sparse or unknown metadata from collapsing recall.
 
-Ranking is deterministic. Positional signature matches and anywhere-signature
-matches precede category, lexical/profile signals, popularity, and ASIN
-tie-breaking. The Agent never imports public targets, hidden intent cards, or
-scenario labels.
+Ranking is deterministic. Positional signature matches, anywhere-signature
+matches, and category evidence remain protected. In v2, popularity moves ahead
+of weaker lexical/profile tie-breaks only after the shopper has supplied an
+explicit constraint and the exact candidate pool contains at most 20 products.
+This catalog-only calibration is disabled for broad pools. The Agent never
+imports public targets, hidden intent cards, or scenario labels.
 
 ### Explicit runtime routing
 
@@ -131,36 +133,39 @@ If exact lookup misses, the last non-empty pool survives. SQLite errors fall bac
 to deterministic category/global order, missing optional metadata is tolerated,
 and response construction has a catalog-valid fallback.
 
-### Why no external LLM or dense model
+### Selected runtime and the LLM experiment
 
-The official rules explicitly permit non-LLM agents. The frozen runtime uses
-Python's standard library and SQLite FTS5, makes no network calls, and requires
-no API key, vector database, GPU, downloaded model, or generated embedding asset.
-Prompt and completion usage are honestly reported as zero, so estimated model
-cost is US$0.
+The selected v2 runtime is still Python's standard library plus SQLite FTS5. It
+makes no network calls, needs no API key, reports 0/0 tokens, and has US$0 model
+cost. This is a measured selection, not an assumption that an LLM cannot help.
 
-Dense retrieval and structured LLM reranking were not adopted because a
-reproducible 50,000-item vector/model artifact, licensing, dependency footprint,
-network failure path, and measurable score gain were not established. BM25 is
-not described as dense or semantic retrieval.
+The repository also contains an opt-in OpenAI Responses API reranker. It can
+only permute the deterministic top-10 candidate set, uses strict structured
+output, and falls back on every configuration, API, timeout, or validation
+failure. On a bounded 10-session comparison it made 11 calls, applied 9 valid
+results, encountered two safe fallbacks, consumed 25,020 input and 953 output
+tokens (estimated US$0.006195), and changed TechnicalScore by **0.000000**.
+Because it added cost, latency, and failure modes without a measured gain, it is
+disabled in the frozen default. See [V2_COMPARISON.md](V2_COMPARISON.md).
 
 ## Repository layout
 
 ```text
 .
 ├── starter/agent.py              production Agent entry point
+├── starter/llm_reranker.py       optional validated API experiment
+├── compare_versions.py           exact v1/v2/optional-hybrid harness
 ├── demo.py                       reproducible Browsing/Override traces
 ├── DEMO_OUTPUT.md                captured end-to-end inference evidence
 ├── evaluator/local_evaluator.py  unmodified official evaluator
 ├── tests/test_agent.py           participant contract/state/routing tests
 ├── tests/test_evaluator.py       organizer evaluator tests
+├── tests/test_v2.py              v2 calibration/API/fallback tests
 ├── data/public_set.jsonl         200 public development sessions
 ├── data/catalog.jsonl            local decompressed catalog; Git-ignored
 ├── docs/                         official contract, rules, FAQ, and config
 ├── ABLATION.md                   commit-linked experiment record
-├── NOTES.md                      audits, decisions, and measurement detail
-├── DEVPOST.md                    copy-ready submission narrative
-├── DEMO_SCRIPT.md                recording plan and safety checklist
+├── V2_COMPARISON.md              v1/v2 selection evidence
 ├── DATA_ATTRIBUTION.md           dataset provenance and usage notes
 ├── requirements.txt              standard-library runtime declaration
 └── SHA256SUMS                    official asset checksums
@@ -172,6 +177,7 @@ not described as dense or semantic retrieval.
 - Python's bundled SQLite with FTS5 enabled
 - Approximately 60 MB for the decompressed catalog, plus in-memory indexes
 - No GPU, API key, network service, third-party Python package, or paid model
+  for the selected runtime
 
 Check FTS5:
 
@@ -213,7 +219,7 @@ The Agent treats the catalog as immutable.
 ## Run, test, and demonstrate
 
 ```bash
-# 23 participant tests + 3 organizer tests
+# 30 participant tests + 3 organizer tests
 python3 -m unittest discover -s tests -v
 
 # Official public evaluator
@@ -221,7 +227,15 @@ python3 -m evaluator.local_evaluator --output results.json
 
 # Readable Browsing and Intent Override traces
 python3 demo.py
+
+# Exact v1 versus deterministic v2 comparison
+python3 compare_versions.py
 ```
+
+An optional, bounded API experiment is reproducible with
+`python3 compare_versions.py --with-llm --env-file .env --limit 10`. Copy
+`.env.example` to `.env`, use a rotated key, and never commit it. The official
+evaluator and default `Agent` do not load `.env` or enable the API path.
 
 `results.json` is intentionally Git-ignored. Do not modify the catalog, public
 labels, evaluation config, or evaluator when reproducing reported results.
@@ -235,7 +249,8 @@ unreleased 800-session final set.
 |---|---|---:|---:|---:|---:|---:|
 | Organizer BM25 baseline | organizer release | 0.125000 | 0.068034 | 9.810000 | 0.119000 | 0.106710 |
 | Stateful signature control | `00f1e41` | 1.000000 | 0.707655 | 2.120000 | 0.888000 | 0.889896 |
-| IntentCart enhanced Agent | `0ea7705` | **1.000000** | **0.709905** | **2.120000** | **0.888000** | **0.890571** |
+| IntentCart v1 (`submission-v1`) | `50bc78e` | 1.000000 | 0.709905 | 2.120000 | 0.888000 | 0.890571 |
+| IntentCart v2 (`submission-v2`) | resolve tag | **1.000000** | **0.856504** | **2.090000** | **0.891000** | **0.935151** |
 
 Scenario cells are `Hit@10 / MRR / MTTC`:
 
@@ -243,35 +258,38 @@ Scenario cells are `Hit@10 / MRR / MTTC`:
 |---|---|---|---|---|
 | Baseline | 0.237500 / 0.126508 / 8.625000 | 0.025000 / 0.004514 / 10.750000 | 0.133333 / 0.104167 / 10.066667 | 0.000000 / 0.000000 / 11.000000 |
 | Control | 1.000000 / 0.697480 / 1.600000 | 1.000000 / 0.671657 / 1.962500 | 1.000000 / 0.811667 / 3.666667 | 1.000000 / 0.765000 / 2.900000 |
-| Enhanced | **1.000000 / 0.703730 / 1.612500** | **1.000000 / 0.671032 / 1.950000** | **1.000000 / 0.811667 / 3.666667** | **1.000000 / 0.765000 / 2.900000** |
+| v1 | 1.000000 / 0.703730 / 1.612500 | 1.000000 / 0.671032 / 1.950000 | 1.000000 / 0.811667 / 3.666667 | 1.000000 / 0.765000 / 2.900000 |
+| v2 | **1.000000 / 0.893889 / 1.550000** | **1.000000 / 0.791329 / 1.950000** | **1.000000 / 0.909444 / 3.633333** | **1.000000 / 0.920000 / 2.900000** |
 
-The enhanced build preserves 100% Hit@10 in every scenario. Buying MRR rises,
-Browsing MTTC improves, and the small Browsing MRR change (-0.000625) is recorded
-rather than hidden by the aggregate increase.
+V2 preserves 100% Hit@10 in every scenario, improves TechnicalScore by 0.044580,
+and improves every scenario's MRR. At the session level it is better on 59,
+equal on 132, and worse on 9 sessions; all five deterministic ID-hash slices
+improve. These are public-development observations, not private-set guarantees.
 
 ### Feasibility evidence
 
-Measurements below are for `0ea7705` on an Apple M2 Pro MacBook Pro, 16 GB,
+Measurements below are for the selected v2 on an Apple M2 Pro MacBook Pro, 16 GB,
 macOS 26.5.2 arm64, Python 3.12.5, and SQLite 3.45.3 with FTS5.
 
 | Item | Measurement |
 |---|---:|
-| Catalog load | 0.395293 s |
-| Agent initialization | 4.853555 s |
-| Evaluation after setup | 9.080255 s |
-| Cold evaluator wall time | 14.85 s |
-| `respond()` calls | 424 |
-| Mean response latency | 21.311968 ms |
-| Median / P95 / maximum latency | 19.126250 / 41.749625 / 67.475958 ms |
-| Maximum resident memory | 428,244,992 bytes (408.4 MiB) |
+| Catalog load | 0.439159 s |
+| Agent initialization | 4.936199 s |
+| Evaluation after setup | 8.873643 s |
+| Cold evaluator wall time | 14.49 s |
+| `respond()` calls | 418 |
+| Mean response latency | 21.130810 ms |
+| Median / P95 / maximum latency | 18.925041 / 40.664084 / 66.037625 ms |
+| Maximum resident memory | 438,288,384 bytes (418.0 MiB) |
 | Prompt / completion tokens | 0 / 0 |
 | Estimated model cost | US$0 |
 | Runtime network calls | 0 |
 
-Two committed-build runs produced byte-identical JSON with SHA-256
-`0faad255af1b1ad12fca5923fd124e0192594e88f348bc3e3bd5caa5f3cdad71`.
-All 23 participant tests and 3 organizer tests pass. See [ABLATION.md](ABLATION.md)
-and [NOTES.md](NOTES.md) for the full evidence trail.
+Two selected-build runs produced byte-identical JSON with SHA-256
+`7b553ce517e7c3122a9df21261703027b07e03b0321c1720b60969173065d31e`.
+All 30 participant tests and 3 organizer tests pass. See
+[V2_COMPARISON.md](V2_COMPARISON.md) and [ABLATION.md](ABLATION.md) for the
+evidence trail.
 
 ## Verified multi-turn examples
 
@@ -298,21 +316,20 @@ and outcomes as a reviewable evidence artifact.
 
 ## Ablation summary
 
-The optional feature flags exist only to make the public ablation reproducible;
-the evaluator uses both defaults (`enable_profile=True`,
-`enable_diversity=True`). With the final routing thresholds:
+The v1 profile/diversity experiments remain reproducible in
+[ABLATION.md](ABLATION.md). For v2, the target-blind popularity calibration
+threshold was swept separately:
 
-| Variant | Hit@10 | MRR | MTTC | TechnicalScore |
+| V2 calibration | Hit@10 | MRR | MTTC | TechnicalScore |
 |---|---:|---:|---:|---:|
-| Profile off, diversity on | 1.000000 | 0.708571 | 2.120000 | 0.890171 |
-| Profile on, diversity off | 1.000000 | 0.709488 | 2.120000 | 0.890446 |
-| Both off | 1.000000 | 0.710155 | 2.125000 | 0.890547 |
-| Both on (frozen default) | 1.000000 | 0.709905 | 2.120000 | **0.890571** |
+| Disabled (v1 order) | 1.000000 | 0.709905 | 2.120000 | 0.890571 |
+| Candidate pool ≤20 (selected) | 1.000000 | 0.856504 | 2.090000 | **0.935151** |
+| Candidate pool ≤50 | 1.000000 | 0.853629 | 2.005000 | 0.935989 |
 
-The combined score gain over both-off is tiny; the features are retained because
-they close judged requirements with direct deterministic tests, preserve every
-scenario's Hit@10, and slightly improve turn efficiency. We make no claim that
-this public-set difference is statistically significant.
+The ≤50 setting is 0.000838 higher on the aggregate public score, but ≤20 was
+selected because it is the more conservative eligibility rule, retains stronger
+worst-slice improvement, and is only twice the output capacity. No threshold is
+claimed to be statistically optimal.
 
 ## Limitations and next steps
 
@@ -329,13 +346,15 @@ this public-set difference is statistically significant.
   hard filter.
 - No untouched 40-session holdout was preserved before full-public iteration.
   We therefore make no holdout or private-set claim.
+- The optional LLM stage did not improve the bounded comparison and is disabled
+  in the frozen runtime.
 - IntentCart is a headless retrieval Agent, not a storefront, transaction
   system, or production policy/compliance layer.
 
-Credible next work is a licensed, reproducible in-memory dense route; structured
-semantic reranking with strict validation and cost/timeout fallback; broader
-language testing; and information-gain estimation for specific questions. Each
-must beat this frozen offline control before adoption.
+Credible next work is a licensed, reproducible in-memory dense route; broader
+language testing; information-gain estimation for specific questions; and a
+fixed-split semantic reranking study larger than the rejected bounded trial.
+Each must beat this frozen offline control before adoption.
 
 ## Data and asset attribution
 
@@ -358,34 +377,27 @@ music.
 
 - **Tay Kai — Agent and integration lead:** catalog signatures, reverse indexes,
   retrieval/ranking, state and override behavior, explicit orchestration,
-  profile conditioning, diversity, full integration, and freeze verification.
+  profile conditioning, diversity, v2 calibration/API experiment, full
+  integration, and freeze verification.
 - **Yi Qian — Evaluation and delivery:** evaluator analysis, initial
   contract/state tests, catalog audits, ablation evidence, reproducibility
   documentation, and release handoff.
-- **Both teammates:** architecture review, measured control selection, and
-  submission narrative. Tay Kai completed the post-handoff W1/W2/W5 enhancement,
-  final artifacts, and integrated release after Yi Qian stopped active work.
+- **Both teammates:** architecture review, measured control selection,
+  documentation review, and release decisions.
 
-## Release and external publication
+## Release
 
 - Public repository: <https://github.com/shang-yi-qian/shopping-copilot>
-- Frozen release tag: `submission-v1`
+- Frozen release tags: `submission-v1` (control) and `submission-v2` (selected)
 - Evaluation date: 2026-09-01 (Asia/Singapore)
 - Catalog archive SHA-256:
   `07fd142631fd6b03e2b4d09988c3eb7d53720e9d57010c79db48eeaada50a8f8`
-- Tests: 26/26 passed
-- Public evaluator: Hit@10 1.0, MRR 0.709905, MTTC 2.12,
-  TechnicalScore 0.890571
+- Tests: 33/33 passed
+- Public evaluator: Hit@10 1.0, MRR 0.856504, MTTC 2.09,
+  TechnicalScore 0.935151
 - External model/API: none; 0 tokens; US$0; no network dependency
 
-Copy-ready Devpost content is in [DEVPOST.md](DEVPOST.md), and the complete
-recording/runbook is in [DEMO_SCRIPT.md](DEMO_SCRIPT.md). The exact remaining
-account actions are in [SUBMISSION_STEPS.md](SUBMISSION_STEPS.md). Publishing the
-Devpost entry and YouTube video requires the team's external accounts; after
-publication, place both public URLs in the Devpost form and verify them while
-signed out.
-
 After the submission deadline, run the released 800-session package only against
-the immutable `submission-v1` tag with the official evaluator unchanged. Retain
+the immutable `submission-v2` tag with the official evaluator unchanged. Retain
 the resulting JSON and environment record; never tune the Agent on private-set
 results.

@@ -1,8 +1,14 @@
 __pycache__/
 *.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.coverage
+htmlcov/
 .DS_Store
 .env
 results.json
+comparison_results*.json
 data/catalog.jsonl
 data/releases/
 # Organizer-only code, private evaluation data, manifests, and build reports.
@@ -10,6 +16,13 @@ organizer/
 secure/
 # Internal provenance and release-audit working documents.
 docs/audits/
+docs/audits.zip
+# Team-only planning, publication copy, and account handoff.
+CLAUDE.md
+NOTES.md
+DEVPOST.md
+DEMO_SCRIPT.md
+SUBMISSION_STEPS.md
 docs/data_selection_audit.md
 docs/participant_release_checklist.md
 # Organizer-only pipeline tests.
