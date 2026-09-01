@@ -166,6 +166,9 @@ disabled in the frozen default. See [V2_COMPARISON.md](V2_COMPARISON.md).
 ├── docs/                         official contract, rules, FAQ, and config
 ├── ABLATION.md                   commit-linked experiment record
 ├── V2_COMPARISON.md              v1/v2 selection evidence
+├── NOTES.md                      audits, decisions, and measurement detail
+├── DEVPOST.md                    copy-ready submission narrative
+├── DEMO_SCRIPT.md                recording plan and safety checklist
 ├── DATA_ATTRIBUTION.md           dataset provenance and usage notes
 ├── requirements.txt              standard-library runtime declaration
 └── SHA256SUMS                    official asset checksums
@@ -288,8 +291,8 @@ macOS 26.5.2 arm64, Python 3.12.5, and SQLite 3.45.3 with FTS5.
 Two selected-build runs produced byte-identical JSON with SHA-256
 `7b553ce517e7c3122a9df21261703027b07e03b0321c1720b60969173065d31e`.
 All 30 participant tests and 3 organizer tests pass. See
-[V2_COMPARISON.md](V2_COMPARISON.md) and [ABLATION.md](ABLATION.md) for the
-evidence trail.
+[V2_COMPARISON.md](V2_COMPARISON.md), [ABLATION.md](ABLATION.md), and
+[NOTES.md](NOTES.md) for the evidence trail.
 
 ## Verified multi-turn examples
 
@@ -382,10 +385,11 @@ music.
 - **Yi Qian — Evaluation and delivery:** evaluator analysis, initial
   contract/state tests, catalog audits, ablation evidence, reproducibility
   documentation, and release handoff.
-- **Both teammates:** architecture review, measured control selection,
-  documentation review, and release decisions.
+- **Both teammates:** architecture review, measured control selection, and
+  submission narrative. Tay Kai completed the post-handoff W1/W2/W5 enhancement,
+  final artifacts, and integrated release after Yi Qian stopped active work.
 
-## Release
+## Release and external publication
 
 - Public repository: <https://github.com/shang-yi-qian/shopping-copilot>
 - Frozen release tags: `submission-v1` (control) and `submission-v2` (selected)
@@ -396,6 +400,13 @@ music.
 - Public evaluator: Hit@10 1.0, MRR 0.856504, MTTC 2.09,
   TechnicalScore 0.935151
 - External model/API: none; 0 tokens; US$0; no network dependency
+
+Copy-ready Devpost content is in [DEVPOST.md](DEVPOST.md), and the complete
+recording/runbook is in [DEMO_SCRIPT.md](DEMO_SCRIPT.md). The exact remaining
+account actions are in [SUBMISSION_STEPS.md](SUBMISSION_STEPS.md). Publishing the
+Devpost entry and YouTube video requires the team's external accounts; after
+publication, place both public URLs in the Devpost form and verify them while
+signed out.
 
 After the submission deadline, run the released 800-session package only against
 the immutable `submission-v2` tag with the official evaluator unchanged. Retain
