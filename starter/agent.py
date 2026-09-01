@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import sqlite3
 from copy import deepcopy
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
+
+from starter.llm_reranker import DEFAULT_MODEL, OpenAIResponsesReranker
 
 
 TOKEN_RE = re.compile(r"[a-z0-9]+", re.IGNORECASE)
@@ -171,7 +174,7 @@ ROUTE_POLICIES = {
 }
 
 
-class Agent:
+class AgentV1:
     """Stateful, route-aware catalog retrieval with deterministic fallbacks."""
 
     def __init__(
@@ -659,3 +662,242 @@ class Agent:
             "recommendations": recommendations,
             "usage": {"prompt_tokens": 0, "completion_tokens": 0},
         }
+
+
+class Agent(AgentV1):
+    """Submission-v2 candidate with calibrated ranking and optional LLM reranking.
+
+    V1 remains available as :class:`AgentV1` for exact side-by-side evaluation.
+    V2 never exposes a product outside the deterministic top-k set to the LLM,
+    validates the returned permutation, and retains deterministic order on every
+    configuration, network, schema, or timeout failure.
+    """
+
+    version = "submission-v2"
+
+    def __init__(
+        self,
+        catalog_path: str | Path = "data/catalog.jsonl",
+        *,
+        enable_profile: bool = True,
+        enable_diversity: bool = True,
+        enable_llm: bool = False,
+        llm_model: str | None = None,
+        llm_timeout_seconds: float = 12.0,
+        llm_reranker: object | None = None,
+        popularity_pool_cutoff: int = 20,
+    ) -> None:
+        super().__init__(
+            catalog_path,
+            enable_profile=enable_profile,
+            enable_diversity=enable_diversity,
+        )
+        self.enable_llm = bool(enable_llm or llm_reranker is not None)
+        self.llm_model = (
+            llm_model or os.environ.get("INTENTCART_LLM_MODEL") or DEFAULT_MODEL
+        )
+        self.llm_config_error: str | None = None
+        self.popularity_pool_cutoff = max(0, int(popularity_pool_cutoff))
+        if llm_reranker is not None:
+            self.llm_reranker = llm_reranker
+        elif self.enable_llm:
+            api_key = os.environ.get("OPENAI_API_KEY", "").strip()
+            if api_key:
+                self.llm_reranker = OpenAIResponsesReranker(
+                    api_key,
+                    model=self.llm_model,
+                    timeout_seconds=llm_timeout_seconds,
+                )
+            else:
+                self.llm_reranker = None
+                self.llm_config_error = "missing_api_key"
+        else:
+            self.llm_reranker = None
+        self.record_index_by_asin = {
+            record.parent_asin: index for index, record in enumerate(self.records)
+        }
+        self.llm_stats = {
+            "attempts": 0,
+            "applied": 0,
+            "fallbacks": 0,
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "errors": defaultdict(int),
+        }
+
+    def _rank_candidates(
+        self,
+        state: dict,
+        candidates: set[int],
+        bm25_order: list[int],
+        profile_order: list[int],
+        route: RoutePolicy,
+    ) -> list[int]:
+        """Promote popularity only after explicit catalog evidence is known."""
+        use_calibration = bool(
+            state["constraints"]
+            and self.popularity_pool_cutoff > 0
+            and len(candidates) <= self.popularity_pool_cutoff
+        )
+        state["popularity_calibration_applied"] = use_calibration
+        if not use_calibration:
+            return super()._rank_candidates(
+                state, candidates, bm25_order, profile_order, route
+            )
+
+        bm25_rank = {index: rank for rank, index in enumerate(bm25_order)}
+        profile_rank = {index: rank for rank, index in enumerate(profile_order)}
+        constraints: list[str] = state["constraints"]
+        category = state.get("category")
+
+        def rank_key(index: int) -> tuple:
+            record = self.records[index]
+            positional = sum(
+                position < len(record.signature)
+                and record.signature[position] == value
+                for position, value in enumerate(constraints)
+            )
+            anywhere = sum(value in record.signature for value in constraints)
+            lexical = bm25_rank.get(index, len(bm25_order) + 1)
+            profile = profile_rank.get(index, len(profile_order) + 1)
+            if route.name == "discovery" and profile_order:
+                soft_ranks = (profile, lexical)
+            else:
+                soft_ranks = (lexical, profile)
+            return (
+                -positional,
+                -anywhere,
+                -(record.category == category),
+                -record.rating_number,
+                *soft_ranks,
+                record.parent_asin,
+            )
+
+        return sorted(candidates, key=rank_key)
+
+    def _llm_candidates(self, recommendations: list[dict]) -> list[dict]:
+        payload: list[dict] = []
+        for deterministic_rank, recommendation in enumerate(recommendations, start=1):
+            parent_asin = str(recommendation["parent_asin"])
+            index = self.record_index_by_asin[parent_asin]
+            row = self.connection.execute(
+                "SELECT title, categories, features, details, store, description "
+                "FROM products WHERE record_index = ? LIMIT 1",
+                (index,),
+            ).fetchone()
+            values = list(row or ("", "", "", "", "", ""))
+            payload.append(
+                {
+                    "parent_asin": parent_asin,
+                    "deterministic_rank": deterministic_rank,
+                    "title": _clean(str(values[0]), 360),
+                    "categories": _clean(str(values[1]), 300),
+                    "features": _clean(str(values[2]), 500),
+                    "details": _clean(str(values[3]), 500),
+                    "store": _clean(str(values[4]), 120),
+                    "description": _clean(str(values[5]), 360),
+                    "rating_count": self.records[index].rating_number,
+                }
+            )
+        return payload
+
+    def _recommend(
+        self,
+        state: dict,
+        user_message: str,
+        top_k: int,
+        route: RoutePolicy,
+    ) -> list[dict]:
+        recommendations = super()._recommend(state, user_message, top_k, route)
+        state["turn_usage"] = {"prompt_tokens": 0, "completion_tokens": 0}
+        state["llm_attempted"] = False
+        state["llm_applied"] = False
+        state["llm_error"] = None
+
+        if not self.enable_llm:
+            state["llm_status"] = "disabled"
+            return recommendations
+        if self.llm_reranker is None:
+            state["llm_status"] = "fallback"
+            state["llm_error"] = self.llm_config_error or "reranker_unavailable"
+            return recommendations
+        if not state["constraints"]:
+            state["llm_status"] = "skipped_no_explicit_constraints"
+            return recommendations
+        if len(recommendations) < 2:
+            state["llm_status"] = "skipped_insufficient_candidates"
+            return recommendations
+        if state["last_candidate_count"] > self.popularity_pool_cutoff:
+            state["llm_status"] = "skipped_large_candidate_pool"
+            return recommendations
+
+        state["llm_attempted"] = True
+        self.llm_stats["attempts"] += 1
+        try:
+            candidate_payload = self._llm_candidates(recommendations)
+            result = self.llm_reranker.rerank(
+                category=state.get("category") or "",
+                constraints=list(state["constraints"]),
+                user_message=user_message,
+                candidates=candidate_payload,
+            )
+        except Exception as error:
+            # An injected/custom reranker receives the same non-fatal boundary.
+            state["llm_status"] = "fallback"
+            state["llm_error"] = f"reranker_failed:{type(error).__name__}"
+            self.llm_stats["fallbacks"] += 1
+            self.llm_stats["errors"][state["llm_error"]] += 1
+            return recommendations
+
+        state["turn_usage"] = {
+            "prompt_tokens": int(result.prompt_tokens),
+            "completion_tokens": int(result.completion_tokens),
+        }
+        self.llm_stats["prompt_tokens"] += int(result.prompt_tokens)
+        self.llm_stats["completion_tokens"] += int(result.completion_tokens)
+        if not result.applied:
+            state["llm_status"] = "fallback"
+            state["llm_error"] = result.error or "rerank_not_applied"
+            self.llm_stats["fallbacks"] += 1
+            self.llm_stats["errors"][state["llm_error"]] += 1
+            return recommendations
+
+        by_asin = {item["parent_asin"]: item for item in recommendations}
+        reranked = [by_asin[parent_asin] for parent_asin in result.ordered_parent_asins]
+        state["llm_status"] = "applied"
+        state["llm_applied"] = True
+        self.llm_stats["applied"] += 1
+        return reranked
+
+    def respond(
+        self,
+        session_id: str,
+        user_message: str,
+        turn: int,
+        top_k: int,
+    ) -> dict:
+        response = super().respond(session_id, user_message, turn, top_k)
+        state = self.sessions[session_id]
+        usage = state.get("turn_usage") or {
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+        }
+        response["usage"] = {
+            "prompt_tokens": int(usage.get("prompt_tokens", 0)),
+            "completion_tokens": int(usage.get("completion_tokens", 0)),
+        }
+        if state["route_history"]:
+            state["route_history"][-1].update(
+                {
+                    "llm_status": state.get("llm_status", "disabled"),
+                    "llm_attempted": bool(state.get("llm_attempted")),
+                    "llm_applied": bool(state.get("llm_applied")),
+                    "llm_model": self.llm_model if self.enable_llm else None,
+                    "llm_error": state.get("llm_error"),
+                    "popularity_calibration_applied": bool(
+                        state.get("popularity_calibration_applied")
+                    ),
+                    "popularity_pool_cutoff": self.popularity_pool_cutoff,
+                }
+            )
+        return response

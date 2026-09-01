@@ -1,4 +1,5 @@
 # IntentCart requires Python >=3.10 because starter/agent.py uses slotted dataclasses.
 # Tested with Python 3.12.5/SQLite 3.45.3 and Python 3.12.14/SQLite 3.53.4,
 # both with FTS5 enabled.
-# The runtime uses Python's standard library only; there are no pip dependencies.
+# The selected runtime and optional Responses API comparison both use only
+# Python's standard library; there are no pip dependencies.

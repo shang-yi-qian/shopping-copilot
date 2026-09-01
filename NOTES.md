@@ -4,6 +4,9 @@ This file records evaluator facts, catalog audits, implementation decisions, and
 release evidence for the complete Person A + Person B integration. Historical
 planning remains in `CLAUDE.md`; this file describes the selected build.
 
+`submission-v1` remains the immutable release control. `submission-v2` is the
+selected build after the paired analysis in [V2_COMPARISON.md](V2_COMPARISON.md).
+
 ## Source precedence
 
 When sources differ, the project follows:
@@ -81,7 +84,7 @@ Design consequences:
 - Signature collisions explain why clarification, lexical ordering, popularity,
   and unseen coverage still matter after exact matching.
 
-## Final Agent architecture
+## Selected v2 Agent architecture
 
 ### Immutable indexes
 
@@ -132,7 +135,7 @@ not printed by production inference.
 
 ### Ranking and coverage
 
-Rank tuples prioritize:
+V1 rank tuples prioritize:
 
 1. positional constraint matches;
 2. matches anywhere in the catalog signature;
@@ -140,6 +143,11 @@ Rank tuples prioritize:
 4. route-appropriate lexical/profile ranks;
 5. popularity; and
 6. parent ASIN for deterministic ties.
+
+V2 preserves items 1–3. After explicit customer constraints narrow the
+candidate pool to at most 20 products, it moves catalog `rating_number` ahead of
+the weaker lexical/profile ranks. Broad or unconstrained pools retain v1 order.
+This calibration uses no targets, intent cards, or scenario labels.
 
 Profile evidence remains soft because all explicit signature evidence and
 category equality outrank it; after enough current evidence it is removed.
@@ -203,6 +211,16 @@ Efficiency      0.888000
 TechnicalScore  0.890571
 ```
 
+Selected v2 (`submission-v2`):
+
+```text
+Hit@10          1.000000
+MRR             0.856504
+MTTC            2.090000
+Efficiency      0.891000
+TechnicalScore  0.935151
+```
+
 Scenario metrics (`Hit@10 / MRR / MTTC`):
 
 | Scenario | Control | Enhanced |
@@ -212,12 +230,15 @@ Scenario metrics (`Hit@10 / MRR / MTTC`):
 | Intent Override | 1.000000 / 0.811667 / 3.666667 | 1.000000 / 0.811667 / 3.666667 |
 | Boundary | 1.000000 / 0.765000 / 2.900000 | 1.000000 / 0.765000 / 2.900000 |
 
-The feature-off table and commands are in `ABLATION.md` and `ablate.py`.
-The small public delta is not claimed as statistically significant.
+V2 scenario metrics are Buying 1.000000/0.893889/1.550000, Browsing
+1.000000/0.791329/1.950000, Intent Override
+1.000000/0.909444/3.633333, and Boundary 1.000000/0.920000/2.900000. The
+feature-off and v2 threshold tables are in `ABLATION.md`. Public differences are
+not claimed as statistically proven generalization.
 
 ## Reproduction and performance record
 
-Selected Agent commit: `0ea7705f9e295855cadc85bd44141b841ff0685f`.
+Selected Agent: the exact commit resolved by `submission-v2`.
 
 Environment:
 
@@ -230,20 +251,20 @@ SQLite 3.45.3 with FTS5
 
 Verification:
 
-- 23/23 participant tests passed.
+- 30/30 participant tests passed.
 - 3/3 organizer tests passed.
 - 200/200 evaluator sessions completed with zero Agent exceptions.
 - Two full outputs were byte-identical.
 - Result JSON SHA-256:
-  `0faad255af1b1ad12fca5923fd124e0192594e88f348bc3e3bd5caa5f3cdad71`.
-- Catalog load: 0.395293 s.
-- Agent initialization: 4.853555 s.
-- Evaluation after setup: 9.080255 s.
-- Cold evaluator wall time: 14.85 s.
-- 424 `respond()` calls.
+  `7b553ce517e7c3122a9df21261703027b07e03b0321c1720b60969173065d31e`.
+- Catalog load: 0.439159 s.
+- Agent initialization: 4.936199 s.
+- Evaluation after setup: 8.873643 s.
+- Cold evaluator wall time: 14.49 s.
+- 418 `respond()` calls.
 - Mean/median/P95/max latency:
-  21.311968 / 19.126250 / 41.749625 / 67.475958 ms.
-- Maximum resident memory: 428,244,992 bytes (408.4 MiB).
+  21.130810 / 18.925041 / 40.664084 / 66.037625 ms.
+- Maximum resident memory: 438,288,384 bytes (418.0 MiB).
 - Network/API/model: none.
 - Prompt/completion tokens: 0/0.
 - Estimated model cost: US$0.
@@ -280,7 +301,7 @@ it.
 | Personalization | Deep-copied profile prior plus off/on test and ablation | Weak supplied conditioning only |
 | Orchestration | Four deterministic policies and safe traces | No learned controller |
 | Vector retrieval | Not adopted under official optional-model rule | No dense claim or vector artifact |
-| LLM reranking | Not adopted under official optional-model rule | No model/API/tokens/cost/network |
+| LLM reranking | Opt-in strict-schema comparison, not selected | Bounded trial had zero score gain; default has no model/API/tokens/cost/network |
 | Metrics | Control/final overall and all scenario metrics | Public development only |
 | Feasibility | CPU runtime, latency, memory, dependency/cost disclosure | Single-process evaluation, not load testing |
 | Demonstration | Executable `demo.py` + captured `DEMO_OUTPUT.md` | Headless, as allowed by the brief |
@@ -291,8 +312,9 @@ it.
 
 - `.env`, decompressed catalog, result JSON, caches, and virtual environments are
   ignored.
-- The Agent has no environment-variable lookup, HTTP client, model SDK, or
-  network call.
+- The selected default makes no environment-secret lookup or network call. The
+  isolated opt-in reranker uses the standard-library HTTPS client and reads the
+  key only when explicitly enabled by `compare_versions.py --with-llm`.
 - API keys must never be committed, logged, pasted into screenshots, or shown in
   the video. Any key previously exposed outside Git should be revoked.
 - Public target ASINs and `public_set` are absent from production Agent logic.
@@ -306,11 +328,12 @@ it.
 Internal artifacts are complete when the final freeze audit passes. Actions that
 require team-owned external accounts remain:
 
-1. publish the final branch to `main` and create `submission-v1`;
+1. publish the final branch to `main` and create `submission-v2`, preserving
+   `submission-v1` as the immutable control;
 2. record the demo using `DEMO_SCRIPT.md` and upload it publicly to YouTube;
 3. paste `DEVPOST.md` into the Devpost entry and add the repository/video links;
 4. verify repository, video, and Devpost access while signed out; and
 5. retain the final submission confirmation, tag SHA, URLs, and result JSON.
 
-After release of the 800-session package, run only the frozen tag with the
+After release of the 800-session package, run only `submission-v2` with the
 unmodified official evaluator and retain the evidence without tuning.

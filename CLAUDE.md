@@ -1817,10 +1817,10 @@ Requirement classifications used below:
 | P5 | Devpost lists datasets/assets | D | Frozen catalog/public set, Amazon Reviews 2023 attribution, and original demo assets listed | No unlicensed product/media asset is included. |
 | P6 | Public repository with well-structured, commented code | D | Agent is structured and the repository was verified public while signed out | Preserve public access through judging. |
 | P7 | README overview, setup, installation, reproduction, limitations, improvements, contributions | D | Complete outline exists | Fresh-clone reproduction and two-person content audit are release blockers. |
-| V1 | Short end-to-end demo video | D | A verified 2:53.8 upload-ready 1080p video, captions, thumbnail, executable `demo.py`, and captured `DEMO_OUTPUT.md` are ready | YouTube upload remains an external-account action. |
+| V1 | Short end-to-end demo video | D | Executable `demo.py`, captured `DEMO_OUTPUT.md`, and the manual `DEMO_SCRIPT.md` runbook are ready | The team records and uploads the final v2 video; generated local media is ignored and not part of GitHub. |
 | V2 | Video is public on YouTube and linked from Devpost | D | Pending external action | Verify while signed out and capture URL/confirmation. |
 | V3 | Backend walkthrough is acceptable without a UI | D | Covered | Use terminal/API/evaluator evidence; do not add a cosmetic UI. |
-| V4 | No unauthorized trademarks or copyrighted content | H/D | Completed in the prepared video using original rendered evidence and narration | No Amazon logos/pages, webinar clips, product images, copyrighted music, or third-party footage; dataset names appear only for factual attribution. |
+| V4 | No unauthorized trademarks or copyrighted content | H/D | Covered by the manual recording safety checklist | Use no Amazon logos/pages, webinar clips, product images, copyrighted music, or third-party footage; dataset names appear only for factual attribution. |
 | J1 | Technical Execution, 35% | J | Strong measured RC | Evidence: architecture, code review, tests, deterministic evaluator, fallback, runtime, and commit-linked metrics. |
 | J2 | Innovation & Problem Insight, 20% | J | Sequential-experiment framing covered | Explain why each turn jointly selects products and information; distinguish this insight from generic “AI search.” |
 | J3 | Impact & Relevance, 20% | J | Completed with an evidence-bounded user/business narrative | Fewer turns and better rank are tied to reduced search friction, discovery, conversion opportunity, and applicability beyond one dataset without inventing business results. |
@@ -2257,15 +2257,18 @@ In addition to Section 9.12, all of the following must be true:
       clarification, and ten-turn behavior have direct test evidence.
 - [x] Profile use is either implemented and ablated or explicitly disclosed as a
       future enhancement; merely storing it is not called personalization.
-- [x] Vector and LLM stages are either reproducible, measured, disclosed, and
-      fallback-safe, or honestly omitted under the official optional-model rule.
+- [x] The LLM stage is reproducible, measured, disclosed, strict-schema and
+      fallback-safe; it is disabled by default because its bounded score delta
+      was zero. Dense retrieval remains honestly omitted.
 - [x] Hit Rate@10, MRR, MTTC, Efficiency, and TechnicalScore are tied to the
       frozen commit and shown overall plus per scenario.
-- [x] Initialization/evaluation runtime, Python/environment, dependencies,
-      network, tokens, cost, and memory estimate are recorded.
+- [x] V2 initialization/evaluation runtime, Python/environment, dependencies,
+      selected-runtime network/tokens/cost, optional-API tokens/cost/failures,
+      and memory are recorded.
 - [x] Catalog/public labels/evaluator are unchanged and no public/private target
       leakage exists.
-- [x] The secret-history and ignored-file audits pass without printing secrets.
+- [x] `.env` is ignored and the comparison loader never prints or executes it;
+      the final history scan is repeated at the v2 freeze.
 - [x] Dataset attribution and all actual tools/APIs/libraries/assets are disclosed.
 - [ ] Video contains no unauthorized trademark, copyrighted, private, or secret
       material and is public on YouTube.
@@ -2328,8 +2331,8 @@ dense or neural semantic claim, zero model tokens/cost, and no network reliance.
 - `DEMO_SCRIPT.md`: timed live-demo plan, evidence list, IP/safety checks, and
   publication checklist.
 - `SUBMISSION_STEPS.md`: exact external publication and post-release actions.
-- `docs/audits/IntentCart_End_to_End_Demo.mp4`: ignored upload-ready 2:53.8
-  video with matching captions, thumbnail, and checksum manifest.
+- `DEMO_SCRIPT.md`: manual team-recording plan; generated media and private
+  audit bundles remain ignored and are not part of the GitHub submission.
 - `NOTES.md`: evaluator/catalog facts, requirement coverage, performance,
   security, and final-evaluation boundary.
 
@@ -2357,10 +2360,84 @@ Code cannot create or submit a YouTube/Devpost entry without the team's accounts
 The unchecked external definition-of-done groups above therefore remain
 intentionally open until the owner:
 
-1. publicly uploads the prepared video named in `SUBMISSION_STEPS.md`;
+1. records and publicly uploads the team-made video described in
+   `SUBMISSION_STEPS.md`;
 2. publishes `DEVPOST.md` and inserts the public YouTube URL;
 3. verifies repository/video/Devpost links while signed out; and
 4. retains submission confirmation, URLs, and the exact `submission-v1` SHA.
 
 All source, runtime, evidence, and copy required for those account actions is
 present in the repository.
+
+## 13. Submission-v2 extension and selection
+
+This section supersedes the v1 selection statements in the historical execution
+record while preserving them as the immutable comparison control.
+
+### 13.1 Version layout
+
+```text
+submission-v1 / starter.agent.AgentV1
+    exact frozen control behavior
+
+submission-v2 / starter.agent.Agent
+    v1 state, routing, retrieval, and safety behavior
+    + target-blind popularity calibration for explicitly constrained pools <=20
+
+starter.llm_reranker.OpenAIResponsesReranker
+    opt-in strict-schema top-10 permutation experiment
+    disabled in the selected runtime
+
+compare_versions.py
+    unchanged evaluator + paired/slice diagnostics + optional API trial
+```
+
+The default `Agent` never enables the API from ambient environment state. The
+API path requires the explicit `--with-llm` comparison flag, reads only the
+expected variables from ignored `.env`, never prints the key, and falls back to
+the deterministic order for configuration, HTTP, timeout, schema, or candidate
+validation failures.
+
+### 13.2 Measured selection
+
+```text
+                         submission-v1   submission-v2
+Hit@10                   1.000000        1.000000
+MRR                      0.709905        0.856504
+MTTC                     2.120000        2.090000
+Efficiency               0.888000        0.891000
+TechnicalScore           0.890571        0.935151
+TechnicalScore delta                      +0.044580
+```
+
+V2 is better on 59 public sessions, equal on 132, and worse on 9. All five
+deterministic sample-ID hash slices improve. The pool-20 setting is selected over
+the slightly higher aggregate pool-50 result because it applies more
+conservatively and retains the stronger worst-slice improvement. None of these
+fully observed public diagnostics is described as holdout evidence.
+
+### 13.3 LLM decision
+
+The user-authorized `.env` key was used for a bounded comparison with the pinned
+`gpt-5.4-nano-2026-03-17` snapshot. The final 10-session trial made 11 attempts,
+applied 9 valid permutations, handled one timeout and one invalid permutation by
+fallback, used 25,020 input and 953 output tokens, cost an estimated US$0.006195,
+and changed TechnicalScore by 0.000000. A preliminary mini-model trial also did
+not justify adoption. A full paid run was therefore not performed.
+
+### 13.4 V2 freeze evidence
+
+- 30 participant tests + 3 organizer tests = 33/33 pass.
+- Two full evaluator outputs are byte-identical with SHA-256
+  `7b553ce517e7c3122a9df21261703027b07e03b0321c1720b60969173065d31e`.
+- V1 behavior reproduced by the harness exactly matches frozen v1 evidence.
+- Public v2 score is 0.935151 with 100% Hit@10 in every scenario.
+- Selected runtime is standard-library Python + SQLite FTS5, 0/0 tokens,
+  US$0 model cost, and no network dependency.
+- Exact v1/v2, slice, threshold, and API evidence is in `V2_COMPARISON.md`.
+- `submission-v1` must never move; the selected release is frozen separately as
+  annotated tag `submission-v2`.
+
+The external account steps remain the public video upload and Devpost submission
+described in `SUBMISSION_STEPS.md`. The released 800-session final set must be
+run once against immutable `submission-v2` without tuning.

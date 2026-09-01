@@ -6,6 +6,10 @@ session reset, profile conditioning, multi-turn state updates, route selection,
 clarification, ranked product predictions, intent override recovery, and the
 scored outcome.
 
+The v2-only trace fields show whether the small exact-pool popularity
+calibration ran and confirm that the selected default kept optional LLM
+reranking disabled.
+
 Reproduce from the repository root:
 
 ```bash
@@ -26,6 +30,8 @@ Agent policy:
   candidate_count=519
   ask_attribute=other
   profile_terms_used=True
+  popularity_calibrated=False
+  llm_status=disabled
 
 Top-10 predictions:
   B07YG84J18, B07TX4JMRP, B09Q8VNLML, B08T9MX1T5, B08K4JWMR6,
@@ -39,6 +45,8 @@ Agent policy:
   candidate_count=1
   ask_attribute=None
   profile_terms_used=False
+  popularity_calibrated=True
+  llm_status=disabled
 
 Top-10 predictions:
   B08PF98BV4, B0BD4QJ21V, B07J3C2Y2X, B07XFLB9WQ, B09D8BGTQX,
@@ -63,6 +71,8 @@ Agent policy:
   candidate_count=1034
   ask_attribute=other
   profile_terms_used=True
+  popularity_calibrated=False
+  llm_status=disabled
 
 Turn 2 customer:
   For that, what matters is: Water Resistant; 3 Year Battery.
@@ -72,6 +82,8 @@ Agent policy:
   candidate_count=1
   ask_attribute=None
   profile_terms_used=False
+  popularity_calibrated=True
+  llm_status=disabled
 
 Top prediction:
   B09YMTWDXJ
@@ -87,6 +99,8 @@ Agent policy:
   candidate_count=1
   ask_attribute=None
   profile_terms_used=False
+  popularity_calibrated=True
+  llm_status=disabled
 
 Top-10 predictions:
   B09YMTWDXJ, B079Q78Q9N, B0BM4WGCJ6, B07GBT82S7, B0B6CYH17L,
@@ -108,17 +122,17 @@ Command:
 python3 -m evaluator.local_evaluator --output results.json
 ```
 
-Committed Agent `0ea7705` on all 200 public development sessions:
+Selected `submission-v2` Agent on all 200 public development sessions:
 
 | Metric | Result |
 |---|---:|
 | Hit@10 | 1.000000 |
-| MRR | 0.709905 |
-| MTTC | 2.120000 |
-| Efficiency | 0.888000 |
-| TechnicalScore | 0.890571 |
+| MRR | 0.856504 |
+| MTTC | 2.090000 |
+| Efficiency | 0.891000 |
+| TechnicalScore | 0.935151 |
 | Prompt/completion tokens | 0 / 0 |
 | Exceptions | 0 |
 
 Two complete runs produced byte-identical result JSON with SHA-256
-`0faad255af1b1ad12fca5923fd124e0192594e88f348bc3e3bd5caa5f3cdad71`.
+`7b553ce517e7c3122a9df21261703027b07e03b0321c1720b60969173065d31e`.

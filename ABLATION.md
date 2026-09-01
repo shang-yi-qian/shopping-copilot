@@ -2,8 +2,10 @@
 
 All competition metrics in this file come from the unmodified organizer
 evaluator over the released 200-session public development set. Public labels
-are never available to Agent logic. Commit `00f1e41` remains the control;
-`0ea7705` is the measured enhanced implementation.
+are never available to Agent logic. Commit `00f1e41` is the original control,
+`submission-v1` is the immutable release control, and `submission-v2` is the
+selected calibrated implementation. See [V2_COMPARISON.md](V2_COMPARISON.md)
+for the full paired analysis.
 
 ## Acceptance policy
 
@@ -25,15 +27,16 @@ Scenario cells are `Hit@10 / MRR / MTTC`.
 |---:|---|---|---:|---:|---:|---:|---:|---|---|---|---|---|
 | 0 | `02f15cd` | Organizer latest-message BM25 baseline | 0.125000 | 0.068034 | 9.810000 | 0.119000 | 0.106710 | 0.237500 / 0.126508 / 8.625000 | 0.025000 / 0.004514 / 10.750000 | 0.133333 / 0.104167 / 10.066667 | 0.000000 / 0.000000 / 11.000000 | Reference |
 | 1 | `00f1e41` | Ordered signatures, state, clarification, unseen coverage | 1.000000 | 0.707655 | 2.120000 | 0.888000 | 0.889896 | 1.000000 / 0.697480 / 1.600000 | 1.000000 / 0.671657 / 1.962500 | 1.000000 / 0.811667 / 3.666667 | 1.000000 / 0.765000 / 2.900000 | Control |
-| 2 | `0ea7705` | Explicit routes, profile soft prior, slot metadata/truncation, conservative family coverage | 1.000000 | 0.709905 | 2.120000 | 0.888000 | **0.890571** | 1.000000 / 0.703730 / 1.612500 | 1.000000 / 0.671032 / 1.950000 | 1.000000 / 0.811667 / 3.666667 | 1.000000 / 0.765000 / 2.900000 | **Selected** |
+| 2 | `submission-v1` | Explicit routes, profile soft prior, slot metadata/truncation, conservative family coverage | 1.000000 | 0.709905 | 2.120000 | 0.888000 | 0.890571 | 1.000000 / 0.703730 / 1.612500 | 1.000000 / 0.671032 / 1.950000 | 1.000000 / 0.811667 / 3.666667 | 1.000000 / 0.765000 / 2.900000 | Release control |
+| 3 | `submission-v2` | Constrained small-pool popularity calibration | 1.000000 | **0.856504** | **2.090000** | **0.891000** | **0.935151** | 1.000000 / 0.893889 / 1.550000 | 1.000000 / 0.791329 / 1.950000 | 1.000000 / 0.909444 / 3.633333 | 1.000000 / 0.920000 / 2.900000 | **Selected** |
 
-The enhanced build keeps Hit@10 at 1.0 for all four scenarios. Relative to the
-control, Buying MRR rises 0.006250, Browsing MTTC improves 0.0125 turns, and
-Browsing MRR changes by -0.000625. The aggregate gain is modest (+0.000675), so
-the release claim is requirement coverage and inspectability with no material
-reliability loss—not a statistically significant model breakthrough.
+V2 keeps Hit@10 at 1.0 for all four scenarios and improves every scenario's MRR.
+Relative to v1, TechnicalScore rises by 0.044580. The paired public outcomes are
+59 better, 132 equal, and 9 worse, and all five deterministic sample-ID hash
+slices improve. Because the public set was fully observed, this is selection
+evidence rather than a statistically proven generalization claim.
 
-## Feature-off ablation
+## V1 feature-off ablation
 
 All rows use the code at `0ea7705` and differ only through its documented
 constructor flags. Reproduce them with:
@@ -61,6 +64,25 @@ An earlier one-product-per-family worktree experiment was deliberately not
 accepted or quoted as a release metric because it was too aggressive for
 Browsing ranking and was not committed. The selected cap permits two products
 per family and only runs before explicit constraints are known.
+
+## V2 calibration ablation
+
+V2 moves catalog popularity ahead of weaker lexical/profile tie-breaks only
+after explicit customer evidence exists. Exact positional matches, any-position
+constraint matches, and category equality remain protected.
+
+| Candidate-pool rule | MRR | MTTC | TechnicalScore | Decision |
+|---|---:|---:|---:|---|
+| Disabled (v1 order) | 0.709905 | 2.120000 | 0.890571 | Control |
+| Every constrained pool | — | — | 0.924915 | Rejected; one hash slice regressed |
+| Pool ≤20 | 0.856504 | 2.090000 | **0.935151** | **Selected** |
+| Pool ≤50 | 0.853629 | 2.005000 | 0.935989 | Rejected as more aggressive public tuning |
+| Soft popularity bucket | — | — | 0.930674 | Rejected; lower score |
+
+Although the ≤50 aggregate is 0.000838 higher, ≤20 is twice the output capacity,
+applies to fewer pools, and has a stronger worst-slice improvement. The choice
+therefore favors a conservative interpretable boundary over the maximum public
+decimal.
 
 ## Catalog investigations
 
@@ -104,39 +126,39 @@ memory or learned identity.
 | External embedding API | Not adopted | Requires a reproducible 50k vector asset, numeric search dependency, generation/query cost, credential handling, and network fallback without a measured need |
 | Local transformer embeddings | Not adopted | No licensed model/artifact or generation path is bundled; adding a large download would break the standard-library fresh-clone story |
 | Custom hashed “dense” vectors | Rejected as a claim | Lexical hashing would not honestly constitute neural semantic retrieval and should not be mislabeled |
-| LLM attribute/ranking API | Not adopted | Officially optional; current structured templates are handled deterministically with 100% Hit@10, while API calls add latency, cost, nondeterminism, and key/quota failure |
-| Specific-attribute entropy policy | Deferred | `other` reveals up to two constraint classes under the official simulator and already yields MTTC 2.12 |
+| LLM attribute/ranking API | Tested, not adopted | Final bounded trial: zero score delta, 25,020/953 tokens, US$0.006195, and two safe fallbacks over 11 calls |
+| Specific-attribute entropy policy | Deferred | `other` reveals up to two constraint classes under the official simulator and v2 yields MTTC 2.09 |
 | Full UI/dashboard | Out of scope | The official deliverable is headless; `demo.py` and `DEMO_OUTPUT.md` provide end-to-end inference evidence |
 
-The repository never calls an LLM, embedding provider, or vector service. Runtime
-model/API is none, prompt/completion tokens are 0/0, estimated model cost is
-US$0, and no API key is required. BM25 is not called dense retrieval.
+The selected default never calls an LLM, embedding provider, or vector service.
+Its runtime model/API is none, prompt/completion tokens are 0/0, estimated model
+cost is US$0, and no API key is required. The opt-in comparison path is isolated,
+strictly validated, and fallback-safe. BM25 is not called dense retrieval.
 
 ## Selected-build verification
 
-Agent implementation commit:
-`0ea7705f9e295855cadc85bd44141b841ff0685f`.
+The exact implementation commit is the object resolved by `submission-v2`.
 
-- Participant tests: 23/23.
+- Participant tests: 30/30.
 - Organizer tests: 3/3.
-- Total: 26/26.
+- Total: 33/33.
 - Official evaluator: 200/200 sessions, zero Agent exceptions.
 - Two complete outputs are byte-identical.
 - Result JSON SHA-256:
-  `0faad255af1b1ad12fca5923fd124e0192594e88f348bc3e3bd5caa5f3cdad71`.
+  `7b553ce517e7c3122a9df21261703027b07e03b0321c1720b60969173065d31e`.
 - Catalog SHA-256:
   `da979b05a68af864cb0dcf9ee6a81c010c7e66a57978ad286c7a2e005fc69a67`.
 - Archive SHA-256:
   `07fd142631fd6b03e2b4d09988c3eb7d53720e9d57010c79db48eeaada50a8f8`.
 - Python 3.12.5; SQLite 3.45.3 FTS5; macOS 26.5.2 arm64;
   Apple M2 Pro MacBook Pro; 16 GB.
-- Catalog load: 0.395293 seconds.
-- Agent initialization: 4.853555 seconds.
-- Evaluation after setup: 9.080255 seconds.
-- Cold evaluator wall time: 14.85 seconds.
+- Catalog load: 0.439159 seconds.
+- Agent initialization: 4.936199 seconds.
+- Evaluation after setup: 8.873643 seconds.
+- Cold evaluator wall time: 14.49 seconds.
 - Mean/median/P95/max response latency:
-  21.311968 / 19.126250 / 41.749625 / 67.475958 ms over 424 calls.
-- Maximum resident memory: 428,244,992 bytes (408.4 MiB).
+  21.130810 / 18.925041 / 40.664084 / 66.037625 ms over 418 calls.
+- Maximum resident memory: 438,288,384 bytes (418.0 MiB).
 - External network/model/tokens/cost: none / none / 0 / US$0.
 
 ## Generalization boundary
@@ -144,7 +166,7 @@ Agent implementation commit:
 No untouched 40-session holdout was preserved before the team evaluated the
 whole public set. No holdout or private performance is claimed. The separate 800
 final sessions are the real generalization test, and only the immutable
-`submission-v1` release may be run after those labels are released.
+`submission-v2` release may be run after those labels are released.
 
 ## Freeze procedure
 
@@ -154,9 +176,9 @@ python3 -m unittest discover -s tests -v
 python3 -m evaluator.local_evaluator --output /tmp/intentcart-results.json
 python3 demo.py
 shasum -a 256 /tmp/intentcart-results.json data/catalog.jsonl catalog.jsonl.gz
-git tag -a submission-v1 -m "IntentCart TechJam 2026 submission"
+git tag -a submission-v2 -m "IntentCart TechJam 2026 submission v2"
 git push origin main --tags
 ```
 
-The exact frozen commit is the object referenced by `submission-v1`, avoiding an
+The exact frozen commit is the object referenced by `submission-v2`, avoiding an
 impossible self-referential hash inside the commit that records this document.

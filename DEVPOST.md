@@ -60,7 +60,9 @@ At each turn a deterministic orchestrator selects `precision`, `discovery`,
 `override_recovery`, or `fallback`. Retrieval merges exact signatures, category,
 BM25, the permitted profile prior, and deterministic category/global fallbacks.
 Ranking protects exact evidence, then applies route-appropriate soft signals,
-popularity, and stable ASIN tie-breaking. Unconstrained Browsing covers no more
+popularity, and stable ASIN tie-breaking. V2 promotes catalog popularity ahead
+of weaker soft tie-breaks only when explicit requirements have narrowed the
+candidate pool to at most 20 products. Unconstrained Browsing covers no more
 than two products from one store/title family before deterministic backfill.
 
 When the candidate pool exceeds the result capacity and a useful turn remains,
@@ -98,41 +100,46 @@ development sessions. They are not private/final-set claims.
 | Metric | Organizer BM25 | IntentCart |
 |---|---:|---:|
 | Hit@10 | 0.125000 | **1.000000** |
-| MRR | 0.068034 | **0.709905** |
-| MTTC | 9.810000 | **2.120000** |
-| Efficiency | 0.119000 | **0.888000** |
-| TechnicalScore | 0.106710 | **0.890571** |
+| MRR | 0.068034 | **0.856504** |
+| MTTC | 9.810000 | **2.090000** |
+| Efficiency | 0.119000 | **0.891000** |
+| TechnicalScore | 0.106710 | **0.935151** |
 
 IntentCart achieved 100% Hit@10 in Buying, Browsing, Intent Override, and
-Boundary. Two full evaluator runs produced byte-identical JSON. The committed
-result SHA-256 is
-`0faad255af1b1ad12fca5923fd124e0192594e88f348bc3e3bd5caa5f3cdad71`.
+Boundary. Against immutable `submission-v1`, v2 preserves that reliability and
+raises MRR from 0.709905 to 0.856504, improves MTTC from 2.12 to 2.09, and raises
+TechnicalScore from 0.890571 to 0.935151. All five deterministic sample-ID hash
+slices improve; these are stability diagnostics, not holdout claims. Two full
+evaluator runs produced byte-identical JSON. The committed result SHA-256 is
+`7b553ce517e7c3122a9df21261703027b07e03b0321c1720b60969173065d31e`.
 
 On an Apple M2 Pro MacBook Pro with 16 GB memory, macOS 26.5.2, Python 3.12.5,
 and SQLite 3.45.3:
 
-- Agent initialization: 4.853555 seconds;
-- evaluation after setup: 9.080255 seconds;
-- cold end-to-end evaluator: 14.85 seconds;
-- mean/P95 response latency: 21.311968/41.749625 ms over 424 calls; and
-- maximum resident memory: 428,244,992 bytes (408.4 MiB).
+- Agent initialization: 4.936199 seconds;
+- evaluation after setup: 8.873643 seconds;
+- cold end-to-end evaluator: 14.49 seconds;
+- mean/P95 response latency: 21.130810/40.664084 ms over 418 calls; and
+- maximum resident memory: 438,288,384 bytes (418.0 MiB).
 
 ## Model, API, cost, and feasibility
 
-The frozen runtime uses **no external model or API**. It requires no API key,
+The selected runtime uses **no external model or API**. It requires no API key,
 network call, GPU, vector database, model download, or third-party Python
 package. Prompt/completion tokens are 0/0 and estimated model cost is US$0.
 
-The official rules make LLMs optional. We did not label BM25 as dense or
-semantic retrieval, and we did not add a phantom LLM for presentation. A dense
-or structured semantic stage would need a licensed reproducible artifact,
-dependency and memory accounting, validated fallback, and a measured improvement
-over this control before adoption.
+We tested rather than assumed the value of an LLM. An opt-in OpenAI Responses
+API path can only reorder the deterministic top-10 set and uses a strict schema,
+token accounting, a pinned model snapshot, and deterministic fallback. On a
+bounded 10-session selected-configuration comparison, 11 calls used 25,020
+input and 953 output tokens (estimated US$0.006195), two calls fell back safely,
+and TechnicalScore changed by 0.000000. We therefore disabled it in the frozen
+default. BM25 is not presented as dense or semantic retrieval.
 
 ## Impact and relevance
 
 The measured outcome is less search friction in this challenge: the target is
-covered in all public sessions and found in 2.12 turns on average. In a real
+covered in all public sessions and found in 2.09 turns on average. In a real
 catalog, the same state/route pattern could help shoppers explore broadly,
 converge after giving requirements, and recover gracefully when their need
 changes. That creates a plausible opportunity for better discovery and
@@ -155,6 +162,11 @@ live inventory/policy integration, observability, and privacy controls.
 ### Runtime APIs
 
 - None
+
+### Evaluation-only API experiment
+
+- OpenAI Responses API with `gpt-5.4-nano-2026-03-17`; rejected from the
+  selected runtime after the bounded comparison
 
 ### Libraries and frameworks
 
@@ -179,19 +191,21 @@ live inventory/policy integration, observability, and privacy controls.
 - Profile tags are generic and form only a weak supplied prior; there is no
   learned identity or cross-session memory.
 - Store/title family is an approximation rather than canonical product lineage.
-- There is no dense embedding or LLM stage in the frozen runtime.
+- The optional LLM stage did not improve its bounded comparison and remains
+  disabled in the frozen runtime.
 - The public set was fully observed, so no untouched holdout claim is made.
 
-Next we would test a licensed reproducible in-memory dense route, schema-validated
-semantic reranking with strict timeout/cost fallback, more robust language, and
-information-gain estimation for specific questions. Each would be accepted only
-after a fixed-split ablation with no scenario reliability loss.
+Next we would test a licensed reproducible in-memory dense route, a larger
+fixed-split semantic-reranking study, more robust language, and information-gain
+estimation for specific questions. Each would be accepted only after a
+fixed-split ablation with no scenario reliability loss.
 
 ## Team contributions
 
 - **Tay Kai:** Agent engineering and final integration—catalog signatures,
   indexes, ranking, dialogue state, override handling, adaptive routes, profile
-  conditioning, family coverage, demo tooling, and freeze verification.
+  conditioning, family coverage, v2 calibration/API experiment, demo tooling,
+  and freeze verification.
 - **Yi Qian:** Evaluation and delivery—evaluator analysis, initial contract/state
   tests, catalog audits, ablation evidence, reproducibility documentation, and
   release handoff.
@@ -206,9 +220,11 @@ Repository: <https://github.com/shang-yi-qian/shopping-copilot>
 ```bash
 python3 -m unittest discover -s tests -v
 python3 demo.py
+python3 compare_versions.py
 python3 -m evaluator.local_evaluator --output results.json
 ```
 
-The submission is frozen by the `submission-v1` tag. Full setup, checksums,
+The selected submission is frozen by the `submission-v2` tag; `submission-v1`
+remains the immutable control. Full setup, checksums, version comparison,
 architecture, ablations, limitations, and final-evaluation procedure are in the
 repository README.

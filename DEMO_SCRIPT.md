@@ -1,23 +1,26 @@
 # IntentCart Demo Video Runbook
 
-Final length: 2:53.8. The upload-ready recording demonstrates real inference
-results and the official evaluator; it does not rely on slides alone.
+Target length: under 3:00. This is a manual recording plan for the team member
+who will narrate and record the final video. It demonstrates real inference
+results and the official evaluator; it does not rely on unsupported claims.
 
-Local upload files are `docs/audits/IntentCart_End_to_End_Demo.mp4`, the matching
-`.srt` captions, and `IntentCart_Demo_Thumbnail.png`. This ignored evidence
-directory keeps generated media out of the source repository.
+Record with your preferred screen-capture tool and save working media outside
+the repository or under the ignored `docs/audits/` directory. Generated media,
+captions, thumbnails, account evidence, and private audit bundles are not part
+of the GitHub source submission.
 
 ## Before recording
 
-- Use the frozen `submission-v1` tag in a clean checkout.
+- Use the frozen `submission-v2` tag in a clean checkout; retain
+  `submission-v1` only for the comparison segment.
 - Close `.env`, password managers, private chats, account pages, and unrelated
   terminal history.
 - Use a terminal prompt/path that does not expose private information.
 - Increase terminal font size and test 1080p readability.
 - Confirm `python3 demo.py` and the evaluator run successfully.
 - Confirm `git status --short` is clean and `git rev-parse HEAD` matches
-  `git rev-list -n 1 submission-v1`.
-- Never show or narrate an API key. The frozen Agent needs no key.
+  `git rev-list -n 1 submission-v2`.
+- Never show or narrate an API key. The selected Agent needs no key.
 - Use only original terminal output and the repository's Mermaid diagram.
 - Do not include product/storefront images, brand logos, organizer webinar or
   slide footage, third-party clips, or copyrighted music.
@@ -43,11 +46,12 @@ Show the README Mermaid diagram and point out:
 - isolated profile and constraint state;
 - precision, discovery, override-recovery, and fallback policies;
 - deterministic ranking, family coverage, and seen-ASIN handling; and
+- v2 calibration only after explicit evidence reduces a pool to at most 20; and
 - simultaneous recommendations plus structured clarification.
 
 Say explicitly:
 
-> The frozen runtime is standard-library Python plus SQLite FTS5. It makes zero
+> The selected runtime is standard-library Python plus SQLite FTS5. It makes zero
 > model or network calls, uses zero tokens, and costs zero dollars in model fees.
 
 ### 0:44–1:20 — Browsing inference
@@ -79,7 +83,7 @@ For `public_0003`, highlight:
 Explain that the demo consults public ground truth only after each prediction to
 label the result. `starter/agent.py` never receives targets or scenario labels.
 
-### 1:40–2:02 — Contract and tests
+### 1:40–1:58 — Contract and tests
 
 Run:
 
@@ -87,12 +91,27 @@ Run:
 python3 -m unittest discover -s tests -v
 ```
 
-Show `Ran 26 tests ... OK`. Mention direct coverage for output validity, session
+Show `Ran 33 tests ... OK`. Mention direct coverage for output validity, session
 isolation, Buying/Browsing routing, profile immutability and soft ranking,
 family coverage, accumulation, neutral Boundary behavior, selective override,
-eligibility epochs, fallbacks, determinism, top-k, and turn 10.
+eligibility epochs, v1 preservation, calibrated ranking, strict API output,
+fallbacks, determinism, top-k, and turn 10.
 
-### 2:02–2:24 — Official results
+### 1:58–2:20 — V1 versus v2 selection
+
+Show `V2_COMPARISON.md` or run:
+
+```bash
+python3 compare_versions.py
+```
+
+State that v2 preserves 100% Hit@10 and improves TechnicalScore from 0.890571
+to 0.935151. Mention that every one of five deterministic diagnostic slices
+improves. Briefly disclose the rejected bounded LLM trial: zero score delta,
+25,020/953 tokens, US$0.006195, and two safe fallbacks across 11 calls. Never
+show `.env` or an API response.
+
+### 2:20–2:36 — Official results
 
 Run before recording, or run live if the 15-second pause is acceptable:
 
@@ -104,23 +123,23 @@ Show and narrate:
 
 ```text
 Hit@10          1.000000
-MRR             0.709905
-MTTC            2.120000
-Efficiency      0.888000
-TechnicalScore  0.890571
+MRR             0.856504
+MTTC            2.090000
+Efficiency      0.891000
+TechnicalScore  0.935151
 Tokens          0
 ```
 
 Then show the per-scenario table in README: Hit@10 is 1.0 in all four scenarios.
 Label every number “200-session public development,” not final/private.
 
-### 2:24–2:54 — Feasibility, impact, and close
+### 2:36–2:54 — Feasibility, impact, and close
 
 Show the feasibility table and say:
 
-- 4.85-second initialization and roughly 21.3 ms mean response latency on the
+- 4.94-second initialization and roughly 21.1 ms mean response latency on the
   recorded Apple M2 Pro environment;
-- approximately 408 MiB maximum resident memory;
+- approximately 418 MiB maximum resident memory;
 - no GPU, external service, model download, tokens, or model cost;
 - fewer turns and higher rank mean less search friction in this benchmark; and
 - applicability to other structured text catalogs is plausible, but no revenue
@@ -142,7 +161,8 @@ Show the public repository URL and closing attribution:
 - [x] `python3 demo.py` inference output visible.
 - [x] Browsing rank-1 turn-2 result visible.
 - [x] Override eligibility and rank-1 turn-3 result visible.
-- [x] 26/26 passing tests visible.
+- [x] 33/33 passing tests visible.
+- [x] V1/v2 comparison and LLM rejection evidence visible.
 - [x] Overall and all four scenario metrics visible.
 - [x] Runtime, memory, tokens, cost, and network dependency stated.
 - [x] Public-development label visible.
@@ -154,8 +174,8 @@ Show the public repository URL and closing attribution:
       private filesystem path, or account credential appears in any frame.
 - [x] No unlicensed music, logos, product imagery, storefront pages, webinar
       footage, organizer slides, or third-party media appears.
-- [x] Captions are accurate and readable.
-- [x] Prepared description links the public repository and credits Amazon
+- [ ] Captions are accurate and readable.
+- [ ] Video description links the public repository and credits Amazon
       Reviews 2023.
 - [ ] Video visibility is Public, not Unlisted or Private if the rules require
       public access.

@@ -1,4 +1,4 @@
-"""Reproduce IntentCart profile/diversity ablations on the public set."""
+"""Reproduce the submission-v1 profile/diversity ablations on the public set."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ import argparse
 import json
 
 from evaluator.local_evaluator import catalog_index, evaluate, load_jsonl
-from starter.agent import Agent
+from starter.agent import AgentV1
 
 
 def main() -> None:
@@ -19,7 +19,7 @@ def main() -> None:
 
     catalog_ids, categories, products = catalog_index(args.catalog)
     result = evaluate(
-        Agent(
+        AgentV1(
             args.catalog,
             enable_profile=not args.disable_profile,
             enable_diversity=not args.disable_diversity,

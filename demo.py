@@ -57,7 +57,9 @@ def run_trace(
             "Policy: "
             f"route={trace['route']}, candidates={trace['candidate_count']}, "
             f"ask_attribute={response['ask_attribute']}, "
-            f"profile_terms_used={trace['profile_terms_used']}"
+            f"profile_terms_used={trace['profile_terms_used']}, "
+            f"popularity_calibrated={trace['popularity_calibration_applied']}, "
+            f"llm_status={trace['llm_status']}"
         )
         print("Ranked parent_asins: " + ", ".join(ranked))
 

@@ -1,33 +1,31 @@
 # IntentCart — Remaining Submission Steps
 
-All internal code, tests, public-development evaluation, documentation, and the
-upload-ready demo are complete. The immutable evaluated release is
-`submission-v1` at commit
-`50bc78ec108966585211d8980efbb78697293495`. Only the following account actions
-remain.
+All internal code, tests, public-development evaluation, and recording guidance
+are complete. The selected immutable release is
+`submission-v2`; `submission-v1` remains the comparison control. Resolve the
+exact selected commit with `git rev-list -n 1 submission-v2`. Only the following
+account actions remain.
 
-## 1. Review the final video files
+## 1. Record and review the team-made video
 
-From the repository root, open the upload-ready artifacts:
-
-```bash
-open docs/audits/IntentCart_End_to_End_Demo.mp4
-open docs/audits/IntentCart_Demo_Thumbnail.png
-```
-
-The final video is 2:53.8, 1920×1080, and contains original rendered evidence
-with narration. Its SHA-256 is
-`f06c5b9d91d3d129daf28c3659fe7d66077499dc88fab22ccbfc77159e2b2ac3`.
+1. Check out `submission-v2` and follow the timed sequence in `DEMO_SCRIPT.md`.
+2. Record the actual terminal demo, 33 passing tests, v1/v2 comparison, and
+   official v2 metrics. Keep `.env` closed and never show an API key.
+3. Keep the final recording under three minutes unless the submission rules
+   explicitly allow longer.
+4. Review the complete export for readable text, correct audio, accurate public
+   metrics, and absence of private paths, credentials, third-party footage,
+   product imagery, logos, or copyrighted music.
+5. Keep the video outside Git or under ignored `docs/audits/`.
 
 ## 2. Publish the video on YouTube
 
-1. Upload `docs/audits/IntentCart_End_to_End_Demo.mp4`.
+1. Upload the reviewed team-made video.
 2. Use the title `IntentCart — End-to-End Conversational Shopping Copilot`.
 3. Paste the suggested description from `DEMO_SCRIPT.md`.
-4. Upload `docs/audits/IntentCart_Demo_Thumbnail.png` as the thumbnail.
-5. Add `docs/audits/IntentCart_End_to_End_Demo.srt` as English subtitles.
-6. Set visibility to **Public**, finish publishing, and copy the public URL.
-7. Open that URL in a signed-out/private browser window and play the beginning
+4. Add accurate English subtitles and a team-made thumbnail if desired.
+5. Set visibility to **Public**, finish publishing, and copy the public URL.
+6. Open that URL in a signed-out/private browser window and play the beginning
    and end.
 
 ## 3. Complete the Devpost entry
@@ -52,7 +50,7 @@ Record the following in the private copy of
 - public YouTube URL;
 - public Devpost URL;
 - submission date/time and confirmation identifier or screenshot;
-- release tag and exact commit above; and
+- release tag `submission-v2` and its resolved exact commit; and
 - confirmation that all links worked while signed out.
 
 Do not commit account screenshots, private identifiers, or credentials.
@@ -60,5 +58,5 @@ Do not commit account screenshots, private identifiers, or credentials.
 ## 5. Run the private final set only after release
 
 When the organizer releases the separate 800-session final package, use a clean
-checkout of `submission-v1` and the unchanged official evaluator. Save its JSON
+checkout of `submission-v2` and the unchanged official evaluator. Save its JSON
 and environment record, but do not modify the Agent or tune against final labels.
